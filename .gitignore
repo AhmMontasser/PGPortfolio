@@ -107,3 +107,7 @@ train_package/
 .DS_Store
 .idea/
 *.db
+
+# full-resolution backtest curves (large; daily-resampled versions are committed)
+dynamic_results/**/portfolio_values.csv
+dynamic_results/portfolio_values.csv
