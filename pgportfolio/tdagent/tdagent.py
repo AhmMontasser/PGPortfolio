@@ -144,7 +144,7 @@ class TDAgent(object):
 
         n, = v.shape # raise ValueError if v is not 1D
         # check if already on the simplex
-        if v.sum() == s and np.alltrue( v>= 0):
+        if v.sum() == s and np.all( v>= 0):
             return v
 
         # get the array of cumulaive sums of a sorted copy of v
