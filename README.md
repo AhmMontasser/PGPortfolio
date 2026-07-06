@@ -15,8 +15,22 @@ Note that this library is a part of our main project, and it is several versions
 * All updates will be incorporated into future versions of the paper.
 * Original versioning history,  and internal discussions, including some in-code comments, are removed in this open-sourced edition. These contains our unimplemented ideas, some of which will very likely become the foundations of our future publications
 
+## Dynamic Universe Backtesting (2020+)
+The original experiments used a *static* coin list picked once before the
+test range. The repository now also contains a **dynamic-universe**
+extension (`pgportfolio/dynamic/`): at the start of every month the top 10
+coins by volume and liquidity are re-selected (from Binance USDT markets,
+delisted coins included, so there is no survivorship bias), the EIIE
+network — ported to TensorFlow 2 — is fine-tuned on the new universe, and
+the month is traded out-of-sample, walk-forward from 2020. See
+[dynamic_user_guide.md](dynamic_user_guide.md) and run
+`python dynamic_main.py --mode backtest`.
+
 ## Platform Support
 Python 3.5+ in windows and Python 2.7+/3.5+ in linux are supported.
+The dynamic-universe extension requires Python 3.9+ and TensorFlow 2
+(`pip install -r requirements-dynamic.txt`); the legacy TF1 training stack
+is unchanged.
 
 ## Dependencies
 Install Dependencies via `pip install -r requirements.txt`

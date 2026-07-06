@@ -1,0 +1,6 @@
+tensorflow>=2.16
+numpy>=1.26
+pandas>=2.0
+scipy>=1.11
+matplotlib>=3.8
+requests>=2.31
