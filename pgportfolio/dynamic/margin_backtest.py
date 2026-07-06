@@ -42,7 +42,10 @@ class MarginBacktester(DynamicBacktester):
 
     def make_agents(self):
         margin = self.margin_config
+        network = self.config.get("network", {})
         self.eiie = MarginEIIEAgent(
+            conv_filters=network.get("conv_filters", 3),
+            dense_filters=network.get("dense_filters", 10),
             feature_number=self.features,
             window_size=self.window,
             commission_rate=self.commission,

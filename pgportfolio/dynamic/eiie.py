@@ -66,8 +66,17 @@ class EIIECore(tf.Module):
         # raw ratios sit at ~1.0, and an all-positive input makes it easy
         # for randomly initialized relu conv channels to be dead for every
         # asset at once (no gradient ever flows); centered returns plus
-        # leaky_relu remove that failure mode
-        network = network / network[:, :, -1:, 0:1] - 1.0
+        # leaky_relu remove that failure mode.  An optional 4th feature is
+        # volume, normalized by its own window mean.
+        prices = network[:, :, :, :3] / network[:, :, -1:, 0:1] - 1.0
+        if network.shape[3] is not None and network.shape[3] > 3:
+            volume = network[:, :, :, 3:4]
+            volume = volume / (tf.reduce_mean(volume, axis=2, keepdims=True)
+                               + 1e-8) - 1.0
+            network = tf.concat([prices, tf.clip_by_value(volume, -1.0, 9.0)],
+                                axis=3)
+        else:
+            network = prices
         network = tf.nn.leaky_relu(tf.nn.conv2d(network, self.conv1_kernel,
                                                 strides=1, padding="VALID")
                                    + self.conv1_bias, alpha=0.01)
@@ -139,7 +148,7 @@ class EIIEAgent(object):
 
     def __init__(self, feature_number=3, window_size=31,
                  commission_rate=0.0025, learning_rate=0.00028,
-                 boundary_penalty=1e-4):
+                 boundary_penalty=1e-4, conv_filters=3, dense_filters=10):
         self._window = window_size
         self._commission = commission_rate
         # loss_function7-style repulsion from the simplex corners (LAMBDA in
@@ -149,7 +158,9 @@ class EIIEAgent(object):
         # freezes permanently.
         self._boundary_penalty = boundary_penalty
         self.net = EIIECore(feature_number=feature_number,
-                            window_size=window_size)
+                            window_size=window_size,
+                            conv_filters=conv_filters,
+                            dense_filters=dense_filters)
         self._optimizer = tf.keras.optimizers.Adam(learning_rate)
         self._train_step = tf.function(
             self._train_step_impl,

@@ -229,13 +229,16 @@ class DynamicBacktester(object):
         grid = np.arange(int(start_ts), int(end_ts), self.period)
         index = pd.Index(grid)
         panel = np.empty((self.features, len(coins), len(grid)), dtype=np.float32)
-        feature_names = ["close", "high", "low"][:self.features]
+        feature_names = ["close", "high", "low", "volume"][:self.features]
         for i, coin in enumerate(coins):
             frame = self._frames[coin]
             frame = frame[(frame.index >= grid[0]) & (frame.index <= grid[-1])]
             for f, feature in enumerate(feature_names):
                 series = frame[feature].reindex(index)
-                series = series.ffill().bfill()
+                if feature == "volume":
+                    series = series.fillna(0.0)  # no candle = nothing traded
+                else:
+                    series = series.ffill().bfill()
                 panel[f, i, :] = series.to_numpy(dtype=np.float32)
         if np.isnan(panel).any():
             raise ValueError("NaNs left in panel for coins %s" % coins)

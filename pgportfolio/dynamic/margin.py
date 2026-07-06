@@ -82,7 +82,18 @@ class MarginEIIECore(tf.Module):
         """
         network = tf.transpose(x, [0, 2, 3, 1])
         # centered returns + leaky_relu: see eiie.EIIECore.__call__
-        network = network / network[:, :, -1:, 0:1] - 1.0
+        # features 0..2 are prices (close/high/low), normalized by the last
+        # close; an optional feature 3 is volume, normalized by its own
+        # window mean (a relative-activity signal)
+        prices = network[:, :, :, :3] / network[:, :, -1:, 0:1] - 1.0
+        if network.shape[3] is not None and network.shape[3] > 3:
+            volume = network[:, :, :, 3:4]
+            volume = volume / (tf.reduce_mean(volume, axis=2, keepdims=True)
+                               + 1e-8) - 1.0
+            network = tf.concat([prices, tf.clip_by_value(volume, -1.0, 9.0)],
+                                axis=3)
+        else:
+            network = prices
         network = tf.nn.leaky_relu(tf.nn.conv2d(network, self.conv1_kernel,
                                                 strides=1, padding="VALID")
                                    + self.conv1_bias, alpha=0.01)
@@ -147,7 +158,7 @@ class MarginEIIEAgent(object):
                  max_leverage=1.0, max_coin_weight=1.0,
                  short_borrow_apr=0.10, usdt_borrow_apr=0.10,
                  trade_period=1800, gross_penalty=0.0,
-                 boundary_penalty=1e-4):
+                 boundary_penalty=1e-4, conv_filters=3, dense_filters=10):
         self._window = window_size
         self._commission = commission_rate
         self._boundary_penalty = boundary_penalty
@@ -158,7 +169,9 @@ class MarginEIIEAgent(object):
         self.net = MarginEIIECore(feature_number=feature_number,
                                   window_size=window_size,
                                   max_leverage=max_leverage,
-                                  max_coin_weight=max_coin_weight)
+                                  max_coin_weight=max_coin_weight,
+                                  conv_filters=conv_filters,
+                                  dense_filters=dense_filters)
         self._optimizer = tf.keras.optimizers.Adam(learning_rate)
         self._train_step = tf.function(
             self._train_step_impl,
