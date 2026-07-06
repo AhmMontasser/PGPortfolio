@@ -1,0 +1,218 @@
+"""Walk-forward backtester for the long/short (margin) EIIE agent.
+
+Reuses the dynamic-universe machinery of ``backtest.DynamicBacktester``
+(monthly top-10 selection, data handling, panels) but with signed-weight
+accounting in USDT:
+
+* positions can be long or short, levered up to ``margin.max_leverage``;
+* per-coin exposure is capped at ``margin.max_coin_weight`` of equity;
+* commissions on turnover, financing on shorted coins and borrowed USDT;
+* a liquidation guard stops the account out if equity hits zero.
+
+Two optional *risk overlays* scale the agent's signed weights at trade
+time (they are risk management, not part of the learned policy):
+
+* **volatility targeting**: portfolio weights are scaled so the predicted
+  annualized volatility (from the trailing covariance of the universe)
+  does not exceed ``overlay.vol_target``;
+* **drawdown deleveraging**: when the equity's trailing drawdown exceeds
+  ``overlay.dd_soft``, exposure is linearly reduced, reaching
+  ``overlay.dd_floor`` (e.g. 10% of normal size) at ``overlay.dd_hard``.
+  This mechanically bounds the depth a losing streak can reach.
+"""
+
+from __future__ import absolute_import, division, print_function
+
+import logging
+
+import numpy as np
+import pandas as pd
+
+from pgportfolio.dynamic.backtest import DynamicBacktester, DAY, SECONDS_PER_YEAR
+from pgportfolio.dynamic.margin import MarginEIIEAgent, margin_period_return
+
+
+class MarginBacktester(DynamicBacktester):
+    def __init__(self, config, archive=None):
+        DynamicBacktester.__init__(self, config, archive=archive)
+        self.margin_config = config["margin"]
+        self.overlay = config.get("overlay", {})
+
+    # ------------------------------------------------------------- agents
+
+    def make_agents(self):
+        margin = self.margin_config
+        self.eiie = MarginEIIEAgent(
+            feature_number=self.features,
+            window_size=self.window,
+            commission_rate=self.commission,
+            learning_rate=self.config["training"]["learning_rate"],
+            max_leverage=margin["max_leverage"],
+            max_coin_weight=margin["max_coin_weight"],
+            short_borrow_apr=margin["short_borrow_apr"],
+            usdt_borrow_apr=margin["usdt_borrow_apr"],
+            trade_period=self.period,
+            gross_penalty=margin.get("gross_penalty", 0.0))
+        self.agents = []
+        return self.agents
+
+    # ---------------------------------------------------------------- run
+
+    def run(self):
+        self.prepare_selection_data()
+        self.build_universes()
+        self.prepare_trading_data()
+        self.make_agents()
+        self.initial_training()
+
+        train_config = self.config["training"]
+        lookback = train_config["rolling_lookback_days"] * DAY
+        state = {
+            "pv": 1.0, "peak": 1.0, "pc": [], "times": [], "gross": [],
+            "turnover": [], "coins": None, "omega": None, "bust": False,
+        }
+        borrow = (self.eiie._short_borrow, self.eiie._usdt_borrow)
+
+        for month_index, month_ts in enumerate(self.month_starts):
+            if state["bust"]:
+                break
+            coins = self.universes[month_ts]
+            month_end = (self.month_starts[month_index + 1]
+                         if month_index + 1 < len(self.month_starts)
+                         else self.test_end)
+            rolling_steps = train_config["rolling_steps"]
+            if rolling_steps > 0:
+                train_panel = self.build_panel(coins, month_ts - lookback, month_ts)
+                self.eiie.train_on_panel(
+                    train_panel, rolling_steps,
+                    batch_size=train_config["batch_size"],
+                    sample_bias=train_config["buffer_biased"],
+                    log_every=0, tag="rolling")
+
+            warmup_periods = max(self.window + 1,
+                                 self.overlay.get("vol_window", 336) + 1)
+            panel_end = min(month_end + self.period, self.test_end)
+            panel = self.build_panel(
+                coins, month_ts - warmup_periods * self.period, panel_end)
+            grid = np.arange(month_ts - warmup_periods * self.period,
+                             panel_end, self.period)
+            self._trade_month_margin(state, coins, panel, grid,
+                                     warmup_periods, borrow)
+            logging.info("month %s done: pv %.4f dd %.3f",
+                         pd.Timestamp(month_ts, unit="s").strftime("%Y-%m"),
+                         state["pv"], 1 - state["pv"] / state["peak"])
+
+        self.results = {
+            "EIIE-LS": {
+                "pv": state["pv"],
+                "pc_vector": np.array(state["pc"], dtype=np.float64),
+                "times": np.array(state["times"], dtype=np.int64),
+                "turnover": np.array(state["turnover"], dtype=np.float64),
+                "gross": np.array(state["gross"], dtype=np.float64),
+            }
+        }
+        return self.results
+
+    # ------------------------------------------------------------ overlays
+
+    def _overlay_scale(self, panel, t, w, state):
+        scale = 1.0
+        vol_target = self.overlay.get("vol_target", 0.0)
+        if vol_target and np.abs(w).sum() > 1e-9:
+            window = self.overlay.get("vol_window", 336)
+            closes = panel[0, :, t - window:t + 1]
+            rets = closes[:, 1:] / closes[:, :-1] - 1.0
+            cov = np.cov(rets)
+            variance = float(w @ cov @ w)
+            periods_per_year = SECONDS_PER_YEAR / self.period
+            vol = np.sqrt(max(variance, 1e-12) * periods_per_year)
+            scale = min(scale, vol_target / max(vol, 1e-9))
+        dd_soft = self.overlay.get("dd_soft", 0.0)
+        if dd_soft:
+            dd_hard = self.overlay.get("dd_hard", 0.15)
+            dd_floor = self.overlay.get("dd_floor", 0.1)
+            drawdown = 1.0 - state["pv"] / state["peak"]
+            if drawdown > dd_soft:
+                fraction = (dd_hard - drawdown) / (dd_hard - dd_soft)
+                scale *= max(dd_floor, min(1.0, fraction))
+        return scale
+
+    # ------------------------------------------------------------- trading
+
+    def _trade_month_margin(self, state, coins, panel, grid, first_trade,
+                            borrow):
+        short_borrow, usdt_borrow = borrow
+        old_coins, old_omega = state["coins"], state["omega"]
+        omega = np.zeros(len(coins))
+        boundary_turnover = 0.0
+        if old_omega is not None:
+            for j, coin in enumerate(old_coins):
+                if coin in coins:
+                    omega[coins.index(coin)] = old_omega[j]
+                else:
+                    # dropped coin: position closed at the boundary
+                    boundary_turnover += abs(old_omega[j])
+
+        cap = self.margin_config["max_coin_weight"]
+        max_gross = self.margin_config["max_leverage"]
+        for t in range(first_trade, len(grid) - 1):
+            history = panel[:, :, t - self.window + 1:t + 1]
+            w = self.eiie.decide_by_history(history, omega.copy())
+            w = w * self._overlay_scale(panel, t, w, state)
+            w = np.clip(w, -cap, cap)
+            gross = np.abs(w).sum()
+            if gross > max_gross:
+                w *= max_gross / gross
+            y = np.clip(panel[0, :, t + 1] / panel[0, :, t], 0.05, 20.0)
+
+            turnover = np.abs(w - omega).sum()
+            if t == first_trade:
+                turnover += boundary_turnover
+            long_exposure = np.maximum(w, 0).sum()
+            short_exposure = np.maximum(-w, 0).sum()
+            usdt_borrowed = max(0.0, long_exposure - 1.0)
+            R = (1.0 + np.dot(w, y - 1.0)
+                 - self.commission * turnover
+                 - short_exposure * short_borrow
+                 - usdt_borrowed * usdt_borrow)
+            if R <= 0.0:
+                logging.warning("liquidated at %s",
+                                pd.Timestamp(int(grid[t + 1]), unit="s"))
+                R = 1e-6
+                state["bust"] = True
+            state["pv"] *= R
+            state["peak"] = max(state["peak"], state["pv"])
+            state["pc"].append(R)
+            state["times"].append(int(grid[t + 1]))
+            state["turnover"].append(turnover)
+            state["gross"].append(np.abs(w).sum())
+            omega = np.zeros_like(w) if state["bust"] else w * y / R
+            if state["bust"]:
+                break
+
+        state["coins"], state["omega"] = list(coins), omega
+
+    # --------------------------------------------------------------- report
+
+    def summary(self):
+        frame = DynamicBacktester.summary(self)
+        for name, result in self.results.items():
+            if "gross" in result:
+                frame.loc[name, "avg_gross_exposure"] = float(
+                    np.mean(result["gross"]))
+        return frame
+
+    def yearly_table(self, name="EIIE-LS"):
+        result = self.results[name]
+        series = pd.Series(result["pc_vector"],
+                           index=pd.to_datetime(result["times"], unit="s"))
+        rows = []
+        for year, chunk in series.groupby(series.index.year):
+            equity = chunk.cumprod()
+            peaks = equity.cummax()
+            rows.append({
+                "year": year,
+                "return": float(equity.iloc[-1]) - 1.0,
+                "max_drawdown": float((1.0 - equity / peaks).max()),
+            })
+        return pd.DataFrame(rows).set_index("year")

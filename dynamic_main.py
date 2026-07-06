@@ -22,7 +22,7 @@ import pandas as pd
 def build_parser():
     parser = ArgumentParser()
     parser.add_argument("--mode", dest="mode", default="backtest",
-                        choices=["download", "universe", "backtest"])
+                        choices=["download", "universe", "backtest", "margin"])
     parser.add_argument("--config", dest="config", default="dynamic_config.json")
     parser.add_argument("--seed", dest="seed", type=int, default=100)
     return parser
@@ -75,8 +75,12 @@ def main():
     np.random.seed(options.seed)
 
     os.makedirs("./database", exist_ok=True)
-    from pgportfolio.dynamic.backtest import DynamicBacktester
-    backtester = DynamicBacktester(config)
+    if options.mode == "margin":
+        from pgportfolio.dynamic.margin_backtest import MarginBacktester
+        backtester = MarginBacktester(config)
+    else:
+        from pgportfolio.dynamic.backtest import DynamicBacktester
+        backtester = DynamicBacktester(config)
 
     if options.mode == "download":
         backtester.prepare_selection_data()
@@ -93,6 +97,10 @@ def main():
 
     backtester.run()
     save_results(backtester, config["output"]["directory"])
+    if hasattr(backtester, "yearly_table"):
+        table = backtester.yearly_table()
+        table.to_csv(os.path.join(config["output"]["directory"], "yearly.csv"))
+        print(table.to_string(float_format=lambda v: "%.4f" % v))
 
 
 if __name__ == "__main__":
