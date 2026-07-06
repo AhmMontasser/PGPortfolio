@@ -39,11 +39,14 @@ class EIIECore(tf.Module):
         initializer = tf.keras.initializers.GlorotUniform(seed=100)
         self.conv1_kernel = tf.Variable(
             initializer([1, 2, feature_number, conv_filters]), name="conv1_kernel")
-        self.conv1_bias = tf.Variable(tf.zeros([conv_filters]), name="conv1_bias")
+        # normalized price inputs sit close to 1.0, so zero-initialized biases
+        # leave many relu units dead from the start (no gradient ever flows);
+        # a small positive bias keeps them initially active
+        self.conv1_bias = tf.Variable(0.1 * tf.ones([conv_filters]), name="conv1_bias")
         self.conv2_kernel = tf.Variable(
             initializer([1, window_size - 1, conv_filters, dense_filters]),
             name="conv2_kernel")
-        self.conv2_bias = tf.Variable(tf.zeros([dense_filters]), name="conv2_bias")
+        self.conv2_bias = tf.Variable(0.1 * tf.ones([dense_filters]), name="conv2_bias")
         self.conv3_kernel = tf.Variable(
             initializer([1, 1, dense_filters + 1, 1]), name="conv3_kernel")
         self.conv3_bias = tf.Variable(tf.zeros([1]), name="conv3_bias")
@@ -59,14 +62,18 @@ class EIIECore(tf.Module):
         :return: [batch, assets+1] portfolio weights (cash first)
         """
         network = tf.transpose(x, [0, 2, 3, 1])          # [b, m, w, f]
-        # normalize everything by the latest close of each asset
-        network = network / network[:, :, -1:, 0:1]
-        network = tf.nn.relu(tf.nn.conv2d(network, self.conv1_kernel,
-                                          strides=1, padding="VALID")
-                             + self.conv1_bias)
-        network = tf.nn.relu(tf.nn.conv2d(network, self.conv2_kernel,
-                                          strides=1, padding="VALID")
-                             + self.conv2_bias)          # [b, m, 1, filters]
+        # normalize by the latest close of each asset and center around 0:
+        # raw ratios sit at ~1.0, and an all-positive input makes it easy
+        # for randomly initialized relu conv channels to be dead for every
+        # asset at once (no gradient ever flows); centered returns plus
+        # leaky_relu remove that failure mode
+        network = network / network[:, :, -1:, 0:1] - 1.0
+        network = tf.nn.leaky_relu(tf.nn.conv2d(network, self.conv1_kernel,
+                                                strides=1, padding="VALID")
+                                   + self.conv1_bias, alpha=0.01)
+        network = tf.nn.leaky_relu(tf.nn.conv2d(network, self.conv2_kernel,
+                                                strides=1, padding="VALID")
+                                   + self.conv2_bias, alpha=0.01)  # [b, m, 1, filters]
         w = previous_w[:, :, None, None]                 # [b, m, 1, 1]
         network = tf.concat([network, w], axis=3)
         network = tf.nn.conv2d(network, self.conv3_kernel,
@@ -131,9 +138,16 @@ class EIIEAgent(object):
     """NNAgent equivalent: owns the network, the loss and the optimizer."""
 
     def __init__(self, feature_number=3, window_size=31,
-                 commission_rate=0.0025, learning_rate=0.00028):
+                 commission_rate=0.0025, learning_rate=0.00028,
+                 boundary_penalty=1e-4):
         self._window = window_size
         self._commission = commission_rate
+        # loss_function7-style repulsion from the simplex corners (LAMBDA in
+        # the original constants.py): without it the shared voting layer can
+        # drive every asset's logit down together until the softmax
+        # saturates at 100% cash, where all gradients vanish and training
+        # freezes permanently.
+        self._boundary_penalty = boundary_penalty
         self.net = EIIECore(feature_number=feature_number,
                             window_size=window_size)
         self._optimizer = tf.keras.optimizers.Adam(learning_rate)
@@ -163,6 +177,9 @@ class EIIEAgent(object):
             self._commission
         pv_vector = gains * tf.concat([tf.ones(1), mu], axis=0)
         loss = -tf.reduce_mean(tf.math.log(pv_vector))
+        if self._boundary_penalty:
+            loss += self._boundary_penalty * tf.reduce_mean(
+                tf.reduce_sum(-tf.math.log(1 + 1e-6 - output), axis=1))
         return loss + self.net.regularization_loss(), output
 
     def _train_step_impl(self, x, y, last_w):

@@ -52,7 +52,8 @@ class MarginBacktester(DynamicBacktester):
             short_borrow_apr=margin["short_borrow_apr"],
             usdt_borrow_apr=margin["usdt_borrow_apr"],
             trade_period=self.period,
-            gross_penalty=margin.get("gross_penalty", 0.0))
+            gross_penalty=margin.get("gross_penalty", 0.0),
+            boundary_penalty=margin.get("boundary_penalty", 2e-5))
         self.agents = []
         return self.agents
 

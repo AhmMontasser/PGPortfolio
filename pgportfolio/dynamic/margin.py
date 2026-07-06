@@ -52,11 +52,13 @@ class MarginEIIECore(tf.Module):
         initializer = tf.keras.initializers.GlorotUniform(seed=100)
         self.conv1_kernel = tf.Variable(
             initializer([1, 2, feature_number, conv_filters]), name="conv1_kernel")
-        self.conv1_bias = tf.Variable(tf.zeros([conv_filters]), name="conv1_bias")
+        # small positive bias: normalized price inputs are ~1.0 and zero
+        # biases leave relu units dead (see eiie.EIIECore)
+        self.conv1_bias = tf.Variable(0.1 * tf.ones([conv_filters]), name="conv1_bias")
         self.conv2_kernel = tf.Variable(
             initializer([1, window_size - 1, conv_filters, dense_filters]),
             name="conv2_kernel")
-        self.conv2_bias = tf.Variable(tf.zeros([dense_filters]), name="conv2_bias")
+        self.conv2_bias = tf.Variable(0.1 * tf.ones([dense_filters]), name="conv2_bias")
         # two logits per coin: long and short
         self.conv3_kernel = tf.Variable(
             initializer([1, 1, dense_filters + 1, 2]), name="conv3_kernel")
@@ -79,13 +81,14 @@ class MarginEIIECore(tf.Module):
             equity; cash is the residual 1 - sum(max(w,0)) + sum(max(-w,0)))
         """
         network = tf.transpose(x, [0, 2, 3, 1])
-        network = network / network[:, :, -1:, 0:1]
-        network = tf.nn.relu(tf.nn.conv2d(network, self.conv1_kernel,
-                                          strides=1, padding="VALID")
-                             + self.conv1_bias)
-        network = tf.nn.relu(tf.nn.conv2d(network, self.conv2_kernel,
-                                          strides=1, padding="VALID")
-                             + self.conv2_bias)          # [b, m, 1, F]
+        # centered returns + leaky_relu: see eiie.EIIECore.__call__
+        network = network / network[:, :, -1:, 0:1] - 1.0
+        network = tf.nn.leaky_relu(tf.nn.conv2d(network, self.conv1_kernel,
+                                                strides=1, padding="VALID")
+                                   + self.conv1_bias, alpha=0.01)
+        network = tf.nn.leaky_relu(tf.nn.conv2d(network, self.conv2_kernel,
+                                                strides=1, padding="VALID")
+                                   + self.conv2_bias, alpha=0.01)  # [b, m, 1, F]
         w = previous_w[:, :, None, None]
         features = tf.concat([network, w], axis=3)       # [b, m, 1, F+1]
 
@@ -105,8 +108,9 @@ class MarginEIIECore(tf.Module):
         leverage = self._max_leverage * tf.nn.sigmoid(
             tf.matmul(pooled, self.lev_kernel) + self.lev_bias)  # [b, 1]
         signed = leverage * net
-        return tf.clip_by_value(signed, -self._max_coin_weight,
-                                self._max_coin_weight)
+        signed = tf.clip_by_value(signed, -self._max_coin_weight,
+                                  self._max_coin_weight)
+        return signed, softmax
 
     def regularization_loss(self):
         return (self._dense_weight_decay * tf.nn.l2_loss(self.conv2_kernel) +
@@ -142,9 +146,11 @@ class MarginEIIEAgent(object):
                  commission_rate=0.001, learning_rate=0.00028,
                  max_leverage=1.0, max_coin_weight=1.0,
                  short_borrow_apr=0.10, usdt_borrow_apr=0.10,
-                 trade_period=1800, gross_penalty=0.0):
+                 trade_period=1800, gross_penalty=0.0,
+                 boundary_penalty=1e-4):
         self._window = window_size
         self._commission = commission_rate
+        self._boundary_penalty = boundary_penalty
         periods_per_day = DAY / trade_period
         self._short_borrow = short_borrow_apr / 365.0 / periods_per_day
         self._usdt_borrow = usdt_borrow_apr / 365.0 / periods_per_day
@@ -169,7 +175,7 @@ class MarginEIIEAgent(object):
             ])
 
     def _loss(self, x, y, last_w):
-        w = self.net(x, last_w)                          # signed [b, m]
+        w, softmax = self.net(x, last_w)                 # signed [b, m]
         price_change = y[:, 0, :] - 1.0
         turnover = tf.reduce_sum(tf.abs(w - last_w), axis=1)
         long_exposure = tf.reduce_sum(tf.nn.relu(w), axis=1)
@@ -184,6 +190,11 @@ class MarginEIIEAgent(object):
         if self._gross_penalty:
             loss += self._gross_penalty * tf.reduce_mean(
                 long_exposure + short_exposure)
+        if self._boundary_penalty:
+            # keep the long/short/cash softmax away from saturated corners
+            # (same role as loss_function7's LAMBDA term, see eiie.py)
+            loss += self._boundary_penalty * tf.reduce_mean(
+                tf.reduce_sum(-tf.math.log(1 + 1e-6 - softmax), axis=1))
         return loss + self.net.regularization_loss(), w
 
     def _train_step_impl(self, x, y, last_w):
@@ -214,7 +225,7 @@ class MarginEIIEAgent(object):
     def decide_by_history(self, history, last_w):
         """:param last_w: [assets] previous signed weights (no cash slot).
         :return: [assets] signed target weights"""
-        w = self._forward(
+        w, _ = self._forward(
             tf.constant(history[None, ...], dtype=tf.float32),
             tf.constant(last_w[None, :], dtype=tf.float32))
         return np.squeeze(w.numpy(), axis=0)
