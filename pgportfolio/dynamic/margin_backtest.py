@@ -145,13 +145,20 @@ class MarginBacktester(DynamicBacktester):
         scale = 1.0
         vol_target = self.overlay.get("vol_target", 0.0)
         if vol_target and np.abs(w).sum() > 1e-9:
-            window = self.overlay.get("vol_window", 336)
-            closes = panel[0, :, t - window:t + 1]
-            rets = closes[:, 1:] / closes[:, :-1] - 1.0
-            cov = np.cov(rets)
-            variance = float(w @ cov @ w)
             periods_per_year = SECONDS_PER_YEAR / self.period
-            vol = np.sqrt(max(variance, 1e-12) * periods_per_year)
+            windows = [self.overlay.get("vol_window", 336)]
+            # turbulence brake: a second, faster estimator so de-risking
+            # reacts to vol expansions in days rather than weeks (the slow
+            # window still governs re-risking on the way down)
+            if self.overlay.get("vol_window_fast", 0):
+                windows.append(self.overlay["vol_window_fast"])
+            vol = 0.0
+            for window in windows:
+                closes = panel[0, :, t - window:t + 1]
+                rets = closes[:, 1:] / closes[:, :-1] - 1.0
+                cov = np.cov(rets)
+                variance = float(w @ cov @ w)
+                vol = max(vol, np.sqrt(max(variance, 1e-12) * periods_per_year))
             scale = min(scale, vol_target / max(vol, 1e-9))
         dd_soft = self.overlay.get("dd_soft", 0.0)
         if dd_soft:
@@ -301,14 +308,24 @@ class MarginBacktester(DynamicBacktester):
                 tracker.pop(coin, None)
                 continue
             if held is None or held["sign"] != sign:
-                tracker[coin] = {"sign": sign, "extreme": closes[i]}
+                tracker[coin] = {"sign": sign, "extreme": closes[i],
+                                 "entry": closes[i]}
                 continue
+            # profit ratchet: once a position's favourable move exceeds
+            # `gain`, tighten the trailing stop to lock in blow-off tops
+            effective_stop = stop
+            ratchet = self.margin_config.get("profit_ratchet")
+            if ratchet:
+                entry = held.get("entry", closes[i])
+                move = (held["extreme"] / entry - 1.0) * (1 if sign > 0 else -1)
+                if move >= ratchet["gain"]:
+                    effective_stop = ratchet["stop"]
             if sign > 0:
                 held["extreme"] = max(held["extreme"], closes[i])
-                hit = closes[i] < held["extreme"] * (1.0 - stop)
+                hit = closes[i] < held["extreme"] * (1.0 - effective_stop)
             else:
                 held["extreme"] = min(held["extreme"], closes[i])
-                hit = closes[i] > held["extreme"] * (1.0 + stop)
+                hit = closes[i] > held["extreme"] * (1.0 + effective_stop)
             if hit:
                 w[i] = 0.0
                 blocked[coin] = now + cooldown

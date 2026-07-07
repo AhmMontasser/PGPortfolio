@@ -284,6 +284,44 @@ class Ensemble(object):
         return combined
 
 
+class BreadthEnsemble(object):
+    """Regime-breadth-adaptive allocation between a long and a short book.
+
+    Instead of a fixed mix, capital is split by *market breadth*: the
+    fraction of universe coins whose own 100-day regime is up funds the
+    long book, the fraction in a down regime funds the short book, and the
+    neutral remainder stays in cash.  In a broad bull (2021) this is ~all
+    long book; deep in a bear (mid-2022) ~all short book; in mixed tape it
+    automatically de-grosses - the per-coin regime signal reused at the
+    portfolio level.
+    """
+
+    def __init__(self, period_seconds, long_book, short_book,
+                 regime_fast_days=20, regime_slow_days=100):
+        self._long = build_rule_agent(long_book, period_seconds)
+        self._short = build_rule_agent(short_book, period_seconds)
+        self._fast = _periods(regime_fast_days, period_seconds)
+        self._slow = _periods(regime_slow_days, period_seconds)
+
+    def begin_month(self, coins):
+        for member in (self._long, self._short):
+            if hasattr(member, "begin_month"):
+                member.begin_month(coins)
+
+    def decide_by_history(self, history, last_w):
+        close = history[0]
+        last = close[:, -1]
+        slow = close[:, -self._slow:].mean(axis=1)
+        fast = close[:, -self._fast:].mean(axis=1)
+        breadth_up = float(np.mean((last > slow) & (fast > slow)))
+        breadth_down = float(np.mean((last < slow) & (fast < slow)))
+        w = breadth_up * np.asarray(self._long.decide_by_history(history, last_w))
+        if breadth_down > 0:
+            w = w + breadth_down * np.asarray(
+                self._short.decide_by_history(history, last_w))
+        return w
+
+
 def build_rule_agent(rule_config, period_seconds):
     kind = rule_config["type"]
     params = {key: value for key, value in rule_config.items()
@@ -296,6 +334,8 @@ def build_rule_agent(rule_config, period_seconds):
         return XSMomentum(period_seconds, **params)
     if kind == "regime":
         return RegimeTrend(period_seconds, **params)
+    if kind == "breadth_ensemble":
+        return BreadthEnsemble(period_seconds, **params)
     if kind == "ensemble":
         return Ensemble(period_seconds, **params)
     raise ValueError("unknown rule agent type %r" % kind)
