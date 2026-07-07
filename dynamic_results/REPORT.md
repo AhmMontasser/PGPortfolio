@@ -26,7 +26,7 @@ currency for all accounting** (equity, PnL, commissions, financing).
 | margin **v1** (30 m, lev 1.5, cap 0.25, vol-target 60%, all-time-peak DD overlay) | shorts+leverage+caps | 0.72 | nearly flat book (avg gross 2.8%) yet 0.25×/day churn → commissions ate ~5%/yr; all-time-peak DD anchor pinned exposure at the floor after 2022 |
 | margin **v3a** (4 h, price features, trailing-90d DD anchor, 5% deadband) | | 0.96 | 2020 +24%, **2021 +139%** (only year clearing +120%), 2022–25 −29/−10/−27/−26%; post-2022 monthly win rate 15% — the learned short-horizon pattern *inverted* after the 2021 regime |
 | margin **v3b** (4 h, +volume feature, wider net 8/20) | | 0.13 | extra capacity overfit; strictly worse than v3a |
-| margin **v4** (v3a engine + calendar-year DD budget 4%/12%, vol-target 50%) | | *(final iteration — see summary tables in this directory)* | bounds each year's drawdown near the budget; returns remain far from target in non-bull years |
+| margin **v4** (v3a engine + calendar-year DD budget 4%/12%, vol-target 50%) | | **1.31** | **per-year MDD 12.0–15.0% — the ≤15% goal holds in all 7 years**; returns: 2021 +103.2%, 2020 −2.0%, 2022 −11.9%, 2023 −6.8%, 2024 −8.1%, 2025 −4.2%, 2026H1 −8.6% |
 
 Full metrics: `summary.csv`, `yearly.csv`, equity curves and monthly
 universes in each run's directory.
@@ -55,14 +55,24 @@ universes in each run's directory.
 
 ## Honest assessment of the 120%/year, ≤15% MDD target
 
+**Result: the drawdown half of the goal is fully met; the return half is
+not.** v4 keeps every calendar year's max drawdown between 12.0% and
+15.0% (the 15.0% is 2020, where the COVID crash gapped through the budget
+by 3 points in a single 4-hour bar — gap risk is the irreducible slack in
+any drawdown-control scheme). Returns: +103% in 2021 (near the +120%
+target), −2% to −12% in every other year, +4.3% annualized overall, versus
+BTC buy-and-hold's +38% annualized with a 77% drawdown.
+
 A strategy returning +120% every year with ≤15% drawdown implies a Sharpe
 ratio roughly in the 3.5–5 range *sustained for seven years* in a liquid,
 increasingly efficient market. Nothing in this framework — and, to our
 knowledge, nothing published on liquid crypto momentum/allocation at these
-frequencies — sustains that. The 2021 result (+139%) shows the *return*
-target is reachable in a strongly trending year; the failure is
-*consistency*: the post-2021 regime does not offer the same short-horizon
-alpha to this class of models.
+frequencies — sustains that. The 2021 results (v3a +139%, v4 +103% under
+a hard risk budget) show the *return* target is reachable in a strongly
+trending year; the failure is *consistency*: the post-2021 regime does not
+offer the same short-horizon alpha to this class of models (post-2022
+monthly win rate 15%), and a hard annual risk budget necessarily converts
+"large losing year" into "small losing year" rather than into profit.
 
 Continuing to tune parameters against the same 2020–26 test window until
 the numbers hit the target would not be research — it would be curve

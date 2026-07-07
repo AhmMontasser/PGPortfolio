@@ -80,3 +80,33 @@ Configuration is in `dynamic_config.json`. Results (summary table, equity
 curves CSV, monthly universes, plot) are written to `./dynamic_results/`.
 The trading commission defaults to the repo's historical 0.25% per side;
 set `trading.trading_consumption` to `0.001` for Binance's current spot fee.
+
+## Long/short margin mode
+
+`python dynamic_main.py --mode margin --config margin_config_v4.json`
+runs the long/short variant (`pgportfolio/dynamic/margin*.py`):
+
+* the network's output head is a softmax over *cash + long slot + short
+  slot per coin*, so it chooses **allocation and direction** jointly; a
+  sigmoid **leverage head** scales gross exposure up to
+  `margin.max_leverage`;
+* signed per-coin exposure is capped at `margin.max_coin_weight` of equity
+  (**max allocation per coin**) — the long-only paper design without this
+  cap was wiped out by the May-2022 LUNA collapse in our backtest;
+* **USDT accounting** throughout: equity/PnL in USDT, commissions on
+  turnover, financing on shorted coins (`short_borrow_apr`) and on USDT
+  borrowed for leverage (`usdt_borrow_apr`), liquidation guard;
+* trade-time **risk overlays** (`overlay.*`): volatility targeting from the
+  trailing covariance, and drawdown-based deleveraging that can anchor to
+  the all-time peak, a trailing-window peak, or a calendar-year peak (an
+  annual loss budget: `"peak_anchor": "calendar_year"`);
+* `margin.rebalance_threshold` is an execution deadband that skips
+  rebalances too small to pay for their commission;
+* `input.trade_period` may be any multiple of 1800 s — stored 30-minute
+  candles are resampled (v3/v4 use 4-hour periods, which cut commission
+  drag ~8× versus 30-minute trading).
+
+Iteration results and the honest assessment against the 120%-per-year /
+15%-max-drawdown target are in `dynamic_results/REPORT.md`: the per-year
+drawdown budget holds (12.0–15.0% each year 2020–2026) but only 2021's
++103% approaches the return target; the strategy earns +4.3%/yr overall.
