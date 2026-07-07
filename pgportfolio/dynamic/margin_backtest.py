@@ -145,11 +145,20 @@ class MarginBacktester(DynamicBacktester):
     def _reference_peak(self, state):
         """Peak used for the drawdown overlay.
 
-        With ``overlay.peak_window_days`` set, the peak is taken over a
-        trailing window instead of all time: after a controlled loss the
-        old high eventually rolls out of the window, so exposure recovers
-        instead of staying pinned at the floor forever.
+        Three anchoring modes:
+        * default: all-time peak (never releases after a deep loss);
+        * ``overlay.peak_window_days``: trailing-window peak - after a
+          controlled loss the old high rolls out of the window, so exposure
+          recovers instead of staying pinned at the floor forever;
+        * ``overlay.peak_anchor = "calendar_year"``: peak since Jan 1 - an
+          annual loss budget, directly bounding the *per-year* max drawdown
+          (episodes cannot chain within a year, and each new year re-arms
+          the budget).
         """
+        if self.overlay.get("peak_anchor") == "calendar_year":
+            start = state.get("year_start_index", 0)
+            recent = state["equity"][start:]
+            return max(max(recent), state["pv"]) if recent else state["pv"]
         window_days = self.overlay.get("peak_window_days", 0)
         if not window_days:
             return state["peak"]
@@ -207,6 +216,10 @@ class MarginBacktester(DynamicBacktester):
                 state["bust"] = True
             state["pv"] *= R
             state["peak"] = max(state["peak"], state["pv"])
+            year = pd.Timestamp(int(grid[t + 1]), unit="s").year
+            if year != state.get("year", year):
+                state["year_start_index"] = len(state["equity"])
+            state["year"] = year
             state["equity"].append(state["pv"])
             state["pc"].append(R)
             state["times"].append(int(grid[t + 1]))
