@@ -218,7 +218,15 @@ class DynamicBacktester(object):
         for coin in self.union_coins:
             frame = self.archive.read_frame(coin, "30m", self.train_start - 60 * DAY,
                                             self.test_end)
-            self._frames[coin] = sanitize_token_swaps(frame, gap_days=3, jump=5.0)
+            frame = sanitize_token_swaps(frame, gap_days=3, jump=5.0)
+            if self.period != 1800:
+                # aggregate the stored 30m candles into trade_period buckets
+                bucket = (frame.index // self.period) * self.period
+                frame = frame.groupby(bucket).agg(
+                    {"open": "first", "high": "max", "low": "min",
+                     "close": "last", "volume": "sum",
+                     "quote_volume": "sum", "trades": "sum"})
+            self._frames[coin] = frame
 
     def build_panel(self, coins, start_ts, end_ts):
         """[features, coins, time] close/high/low array on the 30m grid.

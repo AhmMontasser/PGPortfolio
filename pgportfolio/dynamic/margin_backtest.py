@@ -74,6 +74,7 @@ class MarginBacktester(DynamicBacktester):
         state = {
             "pv": 1.0, "peak": 1.0, "pc": [], "times": [], "gross": [],
             "turnover": [], "coins": None, "omega": None, "bust": False,
+            "equity": [],
         }
         borrow = (self.eiie._short_borrow, self.eiie._usdt_borrow)
 
@@ -135,11 +136,26 @@ class MarginBacktester(DynamicBacktester):
         if dd_soft:
             dd_hard = self.overlay.get("dd_hard", 0.15)
             dd_floor = self.overlay.get("dd_floor", 0.1)
-            drawdown = 1.0 - state["pv"] / state["peak"]
+            drawdown = 1.0 - state["pv"] / self._reference_peak(state)
             if drawdown > dd_soft:
                 fraction = (dd_hard - drawdown) / (dd_hard - dd_soft)
                 scale *= max(dd_floor, min(1.0, fraction))
         return scale
+
+    def _reference_peak(self, state):
+        """Peak used for the drawdown overlay.
+
+        With ``overlay.peak_window_days`` set, the peak is taken over a
+        trailing window instead of all time: after a controlled loss the
+        old high eventually rolls out of the window, so exposure recovers
+        instead of staying pinned at the floor forever.
+        """
+        window_days = self.overlay.get("peak_window_days", 0)
+        if not window_days:
+            return state["peak"]
+        periods = int(window_days * DAY / self.period)
+        recent = state["equity"][-periods:] if state["equity"] else [state["pv"]]
+        return max(max(recent), state["pv"])
 
     # ------------------------------------------------------------- trading
 
@@ -159,6 +175,7 @@ class MarginBacktester(DynamicBacktester):
 
         cap = self.margin_config["max_coin_weight"]
         max_gross = self.margin_config["max_leverage"]
+        deadband = self.margin_config.get("rebalance_threshold", 0.0)
         for t in range(first_trade, len(grid) - 1):
             history = panel[:, :, t - self.window + 1:t + 1]
             w = self.eiie.decide_by_history(history, omega.copy())
@@ -167,6 +184,10 @@ class MarginBacktester(DynamicBacktester):
             gross = np.abs(w).sum()
             if gross > max_gross:
                 w *= max_gross / gross
+            # execution deadband: skip rebalances too small to pay for -
+            # tiny decision noise otherwise churns commissions all day
+            if t != first_trade and np.abs(w - omega).sum() < deadband:
+                w = omega.copy()
             y = np.clip(panel[0, :, t + 1] / panel[0, :, t], 0.05, 20.0)
 
             turnover = np.abs(w - omega).sum()
@@ -186,6 +207,7 @@ class MarginBacktester(DynamicBacktester):
                 state["bust"] = True
             state["pv"] *= R
             state["peak"] = max(state["peak"], state["pv"])
+            state["equity"].append(state["pv"])
             state["pc"].append(R)
             state["times"].append(int(grid[t + 1]))
             state["turnover"].append(turnover)
