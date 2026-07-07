@@ -2,3 +2,5 @@ database/
 train_package/
 dynamic_results/**/portfolio_values.csv
 dynamic_results/portfolio_values.csv
+__pycache__/
+*.pyc
