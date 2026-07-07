@@ -483,6 +483,7 @@ holdout reported for the record):
 Per-year at the 18% budget: +70, +33, +5.5, +32, +27, +16, +8%.
 
 **Goal accounting vs the locked base (both at 18.2% full-period MDD):**
+*(round-8 accounting continues below; round 9 follows)*
 full-period PnL +37% (28.0 vs 20.5 %/yr), dev +41%, holdout +28% — with
 holdout drawdown 26% *lower* (11.1% vs 15.0%) and strictly better year
 consistency. Measured at matched *out-of-sample* drawdown instead
@@ -491,3 +492,63 @@ target is exceeded on the OOS-risk-matched basis and partially met
 (+37%) on the strictest full-period basis; the drawdown and consistency
 goals are met outright. All three adopted overlays were selected on dev
 metrics and confirmed directionally out-of-sample.
+
+---
+
+# Round 9 — 30 pre-registered researches (bias-audited)
+
+Protocol upgrade: all hypotheses and parameters committed to git
+(`experiments/round9_preregistration.md`, commit ec64a5b) **before** any
+result; adoption required improvement in ≥2 of 3 dev sub-folds without
+aggregate-dev degradation; one holdout look, at the final synthesis.
+
+## Bias-audit block (the round's most important numbers)
+
+* **Execution delay (A1):** deciding one 4h bar late costs dev 138→99%/yr
+  and holdout 66→28%/yr. Most of the edge is captured in the first bar
+  after the signal — prompt execution (minutes) is load-bearing; live
+  performance lies between the delay-0 and delay-1 bounds.
+* **Bootstrap (A3):** 90% CI on the round-8 system's holdout Sharpe:
+  **[0.26, 2.03]**. 2.5 years of OOS data cannot pin Sharpe tighter.
+* **Deflated Sharpe (A4):** correcting for ~60 configurations tried
+  across the project, the probability that the final system's holdout
+  Sharpe beats the best-of-N-random benchmark is **≈0.50** — the
+  statistical case, after search correction, is genuinely uncertain.
+* **Sub-fold revalidation (A2):** of round 8's three overlays,
+  vol-of-vol confirms 3/3 folds, corr-gate 2/3, downside-vol only 1/3;
+  the stack as a whole confirms 3/3.
+
+## Ledger (sub-fold rule verdicts)
+
+* **Adopted:** asymmetric short stops (5%; 2/3 folds, dev-better —
+  singles run also showed holdout Sharpe 1.21 vs 1.02); B10 dispersion
+  scaling (2/3 + aggregate, from the portfolio block).
+* Adopted-then-dropped at synthesis: Donchian 30/20 (3/3 dev folds,
+  dev Sharpe 1.75!) and regime-50 shorts — the synthesized system posted
+  the project's best dev Sharpe (1.82) and a **worse holdout (0.96 vs
+  ~1.2)**: channel-length optima are regime artifacts that even
+  sub-fold validation cannot certify. Declining to replace the standing
+  system after a failed validation is the correct (conservative) use of
+  the holdout.
+* Rejected on dev: perp-basis gate and basis book (new data ingested
+  archive-wide), funding-shock gate, entry-hour and weekend windows,
+  staleness exit, partial profit-taking, three-strikes lockout,
+  RS-vs-BTC regime, Donchian 10/5, regime-200, meta-of-metas,
+  member-specific brake, kill-switch, self-momentum, risk parity,
+  Calmar/skew tilts, ERC, monthly meta-rebalance.
+* Accounting researches: BNB fee tier (0.075%) ≈ +0.05 Sharpe both
+  windows; 180-day age filter infeasible for the 2020 universe.
+* Deferred (disclosed): liquidity-weighted sizing, universe-transition
+  smoothing (plumbing not built).
+
+## Round-9 outcome vs the goal
+
+The +50% PnL goal was **not met** — and the round demonstrates *why*
+with the cleanest evidence yet: a pre-registered, sub-fold-validated
+search of 30 further ideas produced exactly one small robust
+improvement (short-side stops) and one scaling refinement, while its
+best in-sample discovery failed out-of-sample. Combined with the
+deflated-Sharpe result (≈0.50 after search correction), the honest
+conclusion is that this dataset's extractable edge is fully harvested;
+the standing system (round-8 stack + asymmetric short stops, risk-budget
+menu unchanged) should now be graded by data that does not exist yet.
