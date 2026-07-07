@@ -178,6 +178,28 @@ class XSMomentum(RuleAgentBase):
         return self._inverse_vol_size(signal, close)
 
 
+class Ensemble(object):
+    """Averages the signed weights of several rule agents (diversification
+    across signal families)."""
+
+    def __init__(self, period_seconds, members, mix=None):
+        self._members = [build_rule_agent(member, period_seconds)
+                         for member in members]
+        self._mix = mix or [1.0 / len(self._members)] * len(self._members)
+
+    def begin_month(self, coins):
+        for member in self._members:
+            if hasattr(member, "begin_month"):
+                member.begin_month(coins)
+
+    def decide_by_history(self, history, last_w):
+        combined = np.zeros(history.shape[1])
+        for weight, member in zip(self._mix, self._members):
+            combined = combined + weight * np.asarray(
+                member.decide_by_history(history, last_w))
+        return combined
+
+
 def build_rule_agent(rule_config, period_seconds):
     kind = rule_config["type"]
     params = {key: value for key, value in rule_config.items()
@@ -188,4 +210,6 @@ def build_rule_agent(rule_config, period_seconds):
         return Donchian(period_seconds, **params)
     if kind == "xsmom":
         return XSMomentum(period_seconds, **params)
+    if kind == "ensemble":
+        return Ensemble(period_seconds, **params)
     raise ValueError("unknown rule agent type %r" % kind)
