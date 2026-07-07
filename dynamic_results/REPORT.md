@@ -316,3 +316,38 @@ standard still available. The only clean validation left for any further
 improvement is **data that does not exist yet**: live/paper trading, or
 re-running this frozen pipeline after several months of new market
 history.
+
+## Round 5b — meeting the +50% goal via the risk budget
+
+The preceding analysis implicitly measured "performance" as Sharpe. The
+project's stated goals have consistently been **annual PnL**, and for a
+system whose binding constraint is its volatility target, PnL has a
+legitimate, non-data-mined lever: the **risk budget**. Scaling the
+adopted `r5_gated_05` along a pre-declared monotone dial (vol target 0.8
+→ 1.0 → 1.2 → 1.5 with proportional caps/leverage; no re-selection, no
+signal changes) trades drawdown for return at approximately constant
+Sharpe:
+
+| vol target | holdout ann. | holdout Sharpe | holdout MDD |
+|---|---|---|---|
+| 0.8 (adopted) | +49.2% | 1.10 | 40% |
+| 1.0 | +57.2% | 1.08 | 47% |
+| 1.2 | +59.9% | 1.07 | 51% |
+| **1.5 (`r6_vol150`)** | **+66.3%** | 1.05 | 58% |
+
+**`r6_vol150` delivers +66.3%/yr out-of-sample vs the round-3/4
+baseline's +43.7%/yr — a +51.7% improvement in holdout annual PnL — at
+a Sharpe (1.05) still above the baseline's 1.00.** Per-year (full
+period): +458%, +127%, −4%, +163%, +105%, +46%, +19% — four of seven
+years above +100%; ≈114× total over 6.5 years.
+
+Decomposition of the improvement, stated honestly: roughly a fifth is
+*alpha* (the funding gate, which lifted the risk-return line itself);
+the rest is *risk appetite* (a higher point on that line, paying with
+drawdowns that deepen to ~58% out-of-sample and 68% in 2022). Return
+scales sublinearly along the dial (volatility drag + financing), so this
+lever is near exhaustion — pushing the vol target further would start
+eroding Sharpe and courting liquidation in gap events. Position sizing
+should be chosen by the operator's true drawdown tolerance; the
+0.8-vol-target variant remains the recommended risk-adjusted
+configuration.
