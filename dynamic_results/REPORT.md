@@ -85,3 +85,66 @@ perpetual-futures funding capture (carry), cross-sectional daily momentum
 with weekly rebalancing, volatility-risk-premium selling with hard tail
 hedges, and ensemble/regime-switching between them. None of these credibly
 promises a *consistent* +120%/year either.
+
+---
+
+# Round 2 — 26 guided approaches with a development/holdout split
+
+Second campaign (target revised to **+100%/year**), with the proper
+methodology requested: **approach selection uses only the development
+window 2020-01…2023-12; the holdout 2024-01…2026-06 was evaluated once,
+after selection.** (Within every run, training remains walk-forward: each
+month's model/universe uses only prior data.)
+
+Families searched (26 total, all in `experiments/` with results in
+`dynamic_results/exp_*`): time-series momentum (price-vs-MA and MA-cross,
+5 speeds, long-only and chop-filtered variants), Donchian channel breakout
+(3 speeds, long-only, with/without trailing stops), cross-sectional
+momentum (3 lookbacks, with/without a BTC regime gate), the EIIE network
+variants from round 1, ensembles, and risk stacks (annual drawdown budget,
+soft trailing budget, 2× leverage) on the dev winners. New machinery:
+per-coin trend gates and minimum-signal **no-trade** filters, **trailing
+per-position stop-losses** with cooldown, ensemble agent.
+
+**League-table findings (dev → holdout):**
+
+* **Donchian 20/10 breakout is the only family that transfers.** Dev
+  +87%/yr (Sharpe 1.5), holdout +21-26%/yr (Sharpe 0.6-0.8). Stop-losses
+  slightly *help* out-of-sample.
+* Cross-sectional momentum fails both windows; the learned EIIE variants
+  are negative on holdout; channel-length tuning (30/15: dev +96%/yr →
+  holdout −4%/yr) is a clean demonstration of why the split matters.
+* The **annual drawdown budget destroys trend returns** (dev 87→27%/yr,
+  holdout 21→1%/yr): it de-risks exactly before the recoveries trend
+  systems live on, and 4-hour gap bars pierce the 12% line regardless
+  (holdout MDD still 25%). Hard per-year drawdown caps and trend
+  following are structurally incompatible at this leverage.
+
+**Selected system — `don_lev2`** (2× levered long-only Donchian 20/10 on
+the monthly top-10 universe, inverse-vol sizing, 80% vol target, 25%
+per-coin cap, 5% deadband, USDT accounting, 0.1% fees + 10% APR
+financing):
+
+| year | return | MDD |
+|------|--------|-----|
+| 2020 | +369.5% | 32.6% |
+| 2021 | +343.0% | 28.8% |
+| 2022 | −36.7% | 47.4% |
+| 2023 | +121.0% | 39.9% |
+| 2024 | +83.0% | 34.2% |
+| 2025 | +4.3% | 29.4% |
+| 2026 H1 | −3.5% | 21.5% |
+
+Full period: **55.1× (+85.4%/yr, Sharpe 1.38, MDD 55.5%)** vs BTC-hold
++38%/yr at 77% MDD. Runner-up (robustness pick): `don_20_10_stops`,
+unlevered — +42.7%/yr, Sharpe 1.05, positive in 6 of 7 years.
+
+**Honest verdict on "+100% per year":** the selected system *averages*
+close to the target (+85%/yr compounded, with three years above +100%),
+but not every year (2022 −37%), and the only unbiased estimate of
+forward performance is the holdout: **≈ +28%/yr at Sharpe ~0.7 with
+30-40% drawdowns**. The full-period average is flattered by overlap with
+the selection window (2020-21 bull). No configuration among the 26
+achieved +100% in every year, and none kept drawdowns near 15% while
+earning trend-level returns — at 2× leverage a single 4-hour market-wide
+gap bar can exceed 15% on its own.
