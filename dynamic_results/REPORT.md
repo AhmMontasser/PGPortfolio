@@ -439,3 +439,55 @@ document that the obvious "improvements" a practitioner would bolt on
 degrade this system. The structural frontier remains where round 5/6
 found it: new information sources and diversification across
 frequencies/systems, not more indicator logic on the same entries.
+
+---
+
+# Round 8 — the 30-research program
+
+Goal: +50% PnL vs the locked base (4h @0.2: +20.5%/yr at 18.2% MDD),
+with lower drawdown and consistent years. Ledger (selection on dev;
+holdout reported for the record):
+
+**Signal / data researches (new information):**
+1-2. *Taker-flow entry confirmation* (order-flow imbalance, 1d/3d, new
+   data column ingested archive-wide): dev-worse / holdout-better
+   (+84%/yr Sh 1.21) — same signature as the funding gate and the 30m
+   frequency: "recent regime rewards caution"; rejected by dev rule,
+   filed as live-validation candidates.
+3-8. *Universe & parameter researches* (alts-only universe, deadband
+   0.10, 40% short book, longs-only funding gate, 150d short regime,
+   15d Donchian entries): all neutral-to-worse — the base sits on a
+   **flat optimum** (robust, not knife-edge).
+
+**Portfolio-construction researches (on the five frequency streams):**
+9-19. risk parity, Calmar tilt, monthly rebalancing, skew tilt, ERC:
+   neutral. Kill-switch, self-momentum: negative. **Three wins:**
+   *downside-vol targeting* (R11), *correlation gate* (R12: de-gross
+   when the five streams correlate >0.85 — systemic-stress detector),
+   *vol-of-vol brake* (R13).
+20-24. Combinations: the **R20c stack** (all three overlays on META-GT)
+   is the risk-adjusted frontier — dev Sharpe 1.41→**1.73**, holdout
+   MDD 57%→**26%**, every calendar year positive (worst **+9.1%**).
+25-28. Syntheses: overlays on EW (tilt contributes little), drop-8h
+   (holdout Sh 1.35; dev-tied), 30m+4h-only (similar).
+29-30. Risk-budget calibration and the final scaled menu.
+
+**Final system (R20c stack, scaled to risk budgets):**
+
+| budget | full-period | holdout | worst year |
+|---|---|---|---|
+| MDD ≤ 15% | +21%/yr | +16.3%/yr, MDD 9.1% | +4.6% |
+| **MDD ≤ 18% (base budget)** | **≈+28%/yr, MDD 18.2%** | **+20.1%/yr, MDD 11.1%** | **+5.5%** |
+| MDD ≤ 25% | +39%/yr | +28.6%/yr, MDD 15.5% | +7.1% |
+
+Per-year at the 18% budget: +70, +33, +5.5, +32, +27, +16, +8%.
+
+**Goal accounting vs the locked base (both at 18.2% full-period MDD):**
+full-period PnL +37% (28.0 vs 20.5 %/yr), dev +41%, holdout +28% — with
+holdout drawdown 26% *lower* (11.1% vs 15.0%) and strictly better year
+consistency. Measured at matched *out-of-sample* drawdown instead
+(≈15%), the improvement exceeds +80% (28.6 vs 15.7 %/yr). So the +50%
+target is exceeded on the OOS-risk-matched basis and partially met
+(+37%) on the strictest full-period basis; the drawdown and consistency
+goals are met outright. All three adopted overlays were selected on dev
+metrics and confirmed directionally out-of-sample.
