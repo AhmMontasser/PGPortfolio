@@ -284,6 +284,59 @@ class Ensemble(object):
         return combined
 
 
+class FundingCarry(RuleAgentBase):
+    """Perp funding-rate carry: short crowded longs, long crowded shorts.
+
+    Positive funding means longs pay shorts (crowded long positioning);
+    persistently extreme funding has historically mean-reverted in the
+    underlying. The signal is the last known 8-hour funding rate (from the
+    panel's ``funding`` feature channel), scaled by ``threshold`` and
+    clipped: coins with |funding| below the threshold are not traded.
+    This is *information orthogonal to price trend* - the point of the
+    book is diversification against the trend books.
+    """
+
+    def __init__(self, period_seconds, funding_channel=3, threshold=0.0003,
+                 clip=3.0, vol_days=30, target_gross=1.0):
+        RuleAgentBase.__init__(self, period_seconds, vol_days, target_gross)
+        self._channel = funding_channel
+        self._threshold = threshold
+        self._clip = clip
+
+    def decide_by_history(self, history, last_w):
+        funding = history[self._channel, :, -1]
+        signal = -np.clip(funding / self._threshold, -self._clip, self._clip)
+        signal[np.abs(funding) < self._threshold] = 0.0
+        return self._inverse_vol_size(signal, history[0])
+
+
+class FundingGate(object):
+    """Suppress positions that fight extreme positioning.
+
+    Wraps any rule agent: longs are blocked while funding is above
+    ``long_max`` (entering a crowded long), shorts while funding is below
+    ``short_min`` (entering a crowded short, squeeze fuel).
+    """
+
+    def __init__(self, period_seconds, member, funding_channel=3,
+                 long_max=0.00075, short_min=-0.00075):
+        self._member = build_rule_agent(member, period_seconds)
+        self._channel = funding_channel
+        self._long_max = long_max
+        self._short_min = short_min
+
+    def begin_month(self, coins):
+        if hasattr(self._member, "begin_month"):
+            self._member.begin_month(coins)
+
+    def decide_by_history(self, history, last_w):
+        w = np.asarray(self._member.decide_by_history(history, last_w))
+        funding = history[self._channel, :, -1]
+        w = np.where((w > 0) & (funding > self._long_max), 0.0, w)
+        w = np.where((w < 0) & (funding < self._short_min), 0.0, w)
+        return w
+
+
 class BreadthEnsemble(object):
     """Regime-breadth-adaptive allocation between a long and a short book.
 
@@ -336,6 +389,10 @@ def build_rule_agent(rule_config, period_seconds):
         return RegimeTrend(period_seconds, **params)
     if kind == "breadth_ensemble":
         return BreadthEnsemble(period_seconds, **params)
+    if kind == "funding_carry":
+        return FundingCarry(period_seconds, **params)
+    if kind == "funding_gate":
+        return FundingGate(period_seconds, **params)
     if kind == "ensemble":
         return Ensemble(period_seconds, **params)
     raise ValueError("unknown rule agent type %r" % kind)

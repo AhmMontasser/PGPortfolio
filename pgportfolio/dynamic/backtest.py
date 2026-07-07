@@ -170,6 +170,8 @@ class DynamicBacktester(object):
         self.period = input_config["trade_period"]
         self.window = input_config["window_size"]
         self.features = input_config["feature_number"]
+        self.feature_names = input_config.get(
+            "features", ["close", "high", "low", "volume"][:self.features])
         self.commission = config["trading"]["trading_consumption"]
         self.selector = UniverseSelector(
             coin_number=input_config["coin_number"],
@@ -227,6 +229,25 @@ class DynamicBacktester(object):
                      "close": "last", "volume": "sum",
                      "quote_volume": "sum", "trades": "sum"})
             self._frames[coin] = frame
+        if "funding" in self.feature_names:
+            self._attach_funding()
+
+    def _attach_funding(self):
+        """Merge the last-known perp funding rate into each coin's frame.
+
+        Funding events land every 8 hours; between events the last known
+        rate is carried forward (that is exactly what a live trader knows).
+        Coins without a perp (or before its listing) get 0 - a neutral
+        signal, so funding-based books simply do not trade them.
+        """
+        self.archive.ensure_data(self.union_coins, "fundingRate",
+                                 pd.Timestamp(self.train_start, unit="s"),
+                                 pd.Timestamp(self.test_end - 1, unit="s"))
+        for coin, frame in self._frames.items():
+            funding = self.archive.read_funding(coin, self.train_start - 60 * DAY,
+                                                self.test_end)
+            series = funding["rate"].reindex(frame.index, method="ffill")
+            frame["funding"] = series.fillna(0.0)
 
     def build_panel(self, coins, start_ts, end_ts):
         """[features, coins, time] close/high/low array on the 30m grid.
@@ -237,14 +258,15 @@ class DynamicBacktester(object):
         grid = np.arange(int(start_ts), int(end_ts), self.period)
         index = pd.Index(grid)
         panel = np.empty((self.features, len(coins), len(grid)), dtype=np.float32)
-        feature_names = ["close", "high", "low", "volume"][:self.features]
         for i, coin in enumerate(coins):
             frame = self._frames[coin]
             frame = frame[(frame.index >= grid[0]) & (frame.index <= grid[-1])]
-            for f, feature in enumerate(feature_names):
+            for f, feature in enumerate(self.feature_names):
                 series = frame[feature].reindex(index)
                 if feature == "volume":
                     series = series.fillna(0.0)  # no candle = nothing traded
+                elif feature == "funding":
+                    series = series.ffill().fillna(0.0)  # no perp = neutral
                 else:
                     series = series.ffill().bfill()
                 panel[f, i, :] = series.to_numpy(dtype=np.float32)

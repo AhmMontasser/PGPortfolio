@@ -89,6 +89,9 @@ class BinanceArchive(object):
                     " volume FLOAT, quote_volume FLOAT, trades INTEGER,"
                     " PRIMARY KEY (symbol, ts));".format(table))
             cursor.execute(
+                "CREATE TABLE IF NOT EXISTS funding (symbol VARCHAR(20),"
+                " ts INTEGER, rate FLOAT, PRIMARY KEY (symbol, ts));")
+            cursor.execute(
                 "CREATE TABLE IF NOT EXISTS downloaded_months (symbol VARCHAR(20),"
                 " interval VARCHAR(8), month VARCHAR(8), rows INTEGER,"
                 " PRIMARY KEY (symbol, interval, month));")
@@ -121,6 +124,12 @@ class BinanceArchive(object):
             symbols = [s for s in symbols if s.endswith(quote)]
         return symbols
 
+    @staticmethod
+    def _month_prefix(symbol, interval):
+        if interval == "fundingRate":
+            return "data/futures/um/monthly/fundingRate/{}/".format(symbol)
+        return "data/spot/monthly/klines/{}/{}/".format(symbol, interval)
+
     def list_symbol_months(self, symbol, interval):
         """Which monthly zip files exist for a symbol/interval (cached)."""
         with self._db_lock, self._connect() as connection:
@@ -131,7 +140,7 @@ class BinanceArchive(object):
         # refresh the cached listing once a week so new months show up
         if row is not None and now - row[1] < 7 * 24 * 3600:
             return row[0].split(",") if row[0] else []
-        prefix = "data/spot/monthly/klines/{}/{}/".format(symbol, interval)
+        prefix = self._month_prefix(symbol, interval)
         body = self._get("{}?delimiter=/&prefix={}".format(LIST_HOST, prefix))
         months = []
         if body is not None:
@@ -167,7 +176,35 @@ class BinanceArchive(object):
                          int(parts[8])))
         return rows
 
+    @staticmethod
+    def _parse_funding_zip(content):
+        archive = zipfile.ZipFile(io.BytesIO(content))
+        raw = archive.read(archive.namelist()[0]).decode()
+        rows = []
+        for line in raw.splitlines():
+            if not line or line.startswith("calc_time"):
+                continue
+            parts = line.split(",")
+            ts = int(parts[0])
+            ts //= 10 ** 6 if ts > 10 ** 14 else 10 ** 3
+            rows.append((ts, float(parts[2])))
+        return rows
+
     def _download_month(self, symbol, interval, month):
+        if interval == "fundingRate":
+            url = "{}/{}{}-fundingRate-{}.zip".format(
+                ARCHIVE_HOST, self._month_prefix(symbol, interval), symbol, month)
+            content = self._get(url)
+            rows = self._parse_funding_zip(content) if content is not None else []
+            with self._db_lock, self._connect() as connection:
+                connection.executemany(
+                    "INSERT OR REPLACE INTO funding VALUES (?,?,?);",
+                    [(symbol,) + row for row in rows])
+                connection.execute(
+                    "INSERT OR REPLACE INTO downloaded_months VALUES (?,?,?,?);",
+                    (symbol, interval, month, len(rows)))
+                connection.commit()
+            return len(rows)
         url = "{}/data/spot/monthly/klines/{}/{}/{}-{}-{}.zip".format(
             ARCHIVE_HOST, symbol, interval, symbol, interval, month)
         content = self._get(url)
@@ -182,6 +219,19 @@ class BinanceArchive(object):
                 (symbol, interval, month, len(rows)))
             connection.commit()
         return len(rows)
+
+    def read_funding(self, symbol, start_ts=None, end_ts=None):
+        query = "SELECT ts, rate FROM funding WHERE symbol=?"
+        args = [symbol]
+        if start_ts is not None:
+            query += " AND ts>=?"
+            args.append(int(start_ts))
+        if end_ts is not None:
+            query += " AND ts<?"
+            args.append(int(end_ts))
+        with self._connect() as connection:
+            return pd.read_sql_query(query + " ORDER BY ts;", connection,
+                                     params=args, index_col="ts")
 
     def ensure_data(self, symbols, interval, start, end, log_every=200):
         """Make sure candles for symbols between start and end are cached.
