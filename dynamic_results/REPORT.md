@@ -267,3 +267,52 @@ flat or fell — the defining signature of a mined-out edge. Genuinely
 new *information* (funding rates, order-flow, on-chain activity,
 cross-exchange basis), not new transformations of the same prices, is
 what a further step-change would require.
+
+---
+
+# Round 5 — new information: perpetual funding rates
+
+Round 4's conclusion pointed at new information, and the same public
+archive carries it: **USD-M perp funding rates** (8-hour positioning /
+carry data), integrated as a per-coin panel feature (last known rate,
+forward-filled; coins without a perp read 0 = neutral).
+
+* **Pure funding carry fails** (dev −23%/yr, holdout −9%/yr): funding is
+  positively correlated with trend, so shorting high-funding coins means
+  shorting the strongest trends. An instructive negative result.
+* **Funding as an entry gate works**: blocking entries that fight extreme
+  positioning (no new longs while funding > threshold, no new shorts
+  below −threshold) improves the baseline **on both windows**, and the
+  effect is smooth across thresholds (holdout +49–56%/yr, Sharpe
+  1.10–1.18 at 0.05/0.075/0.10 %-per-8h) — a robust effect, not a spike.
+* The top-20-universe trap repeated even with gates (dev Sharpe 1.85 —
+  the project's highest — holdout 0.83), and a system-level blend with
+  the breadth variant added nothing (return correlation 0.78–0.91).
+
+**Adopted system (dev-selected: best dev Sharpe at baseline-level
+drawdown): `r5_gated_05`** = round-3 ensemble with 0.05%/8h funding
+gates on both books:
+
+|  | dev 2020–23 | holdout 2024–26H1 |
+|---|---|---|
+| round-3 baseline | +98%/yr, Sharpe 1.58, MDD 47% | +43.7%/yr, Sharpe 1.00, MDD 40% |
+| **r5_gated_05** | +88%/yr, **Sharpe 1.67**, MDD 48% | **+49.2%/yr, Sharpe 1.10**, MDD 40% |
+
+## Final honest accounting
+
+Improvement achieved this round: **holdout return +13%, Sharpe +10%**
+(conservative, dev-selected variant; the a-priori 0.075% threshold shows
++28%/+18% but crediting that specific number would be selecting on the
+holdout). The stated **+50% goal was not met**, and the disciplined
+conclusion is that it cannot be met with this dataset without violating
+the "respect OOS" constraint: after ~50 configurations across five
+rounds, every additional in-sample gain has failed to transfer, and —
+full disclosure — holdout statistics have been *observed* for every
+variant along the way (selection used dev only, but the holdout's
+evidentiary value decays with every look; roughly 50 looks have been
+spent). The funding-gate adoption rests on dev-side superiority, an
+economic prior, and threshold robustness — the strongest evidence
+standard still available. The only clean validation left for any further
+improvement is **data that does not exist yet**: live/paper trading, or
+re-running this frozen pipeline after several months of new market
+history.
