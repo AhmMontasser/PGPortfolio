@@ -238,6 +238,27 @@ class DynamicBacktester(object):
             self._frames[coin] = frame
         if "funding" in self.feature_names:
             self._attach_funding()
+        if "basis" in self.feature_names:
+            self._attach_basis()
+
+    def _attach_basis(self):
+        """Perp-spot basis: perp 4h close / spot close - 1 (sentiment).
+
+        Coins without a perp (or before its listing) read 0 = neutral.
+        """
+        self.archive.ensure_data(self.union_coins, "perp4h",
+                                 pd.Timestamp(self.train_start, unit="s"),
+                                 pd.Timestamp(self.test_end - 1, unit="s"))
+        for coin, frame in self._frames.items():
+            perp = self.archive.read_frame(coin, "perp4h",
+                                           self.train_start - 60 * DAY,
+                                           self.test_end)
+            if not len(perp):
+                frame["basis"] = 0.0
+                continue
+            perp_close = perp["close"].reindex(frame.index, method="ffill")
+            frame["basis"] = (perp_close / frame["close"] - 1.0)\
+                .clip(-0.05, 0.05).fillna(0.0)
 
     def _attach_funding(self):
         """Merge the last-known perp funding rate into each coin's frame.
@@ -272,7 +293,7 @@ class DynamicBacktester(object):
                 series = frame[feature].reindex(index)
                 if feature == "volume":
                     series = series.fillna(0.0)  # no candle = nothing traded
-                elif feature in ("funding", "taker_imb"):
+                elif feature in ("funding", "taker_imb", "basis"):
                     series = series.ffill().fillna(0.0)  # missing = neutral
                 else:
                     series = series.ffill().bfill()

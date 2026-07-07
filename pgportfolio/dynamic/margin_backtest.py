@@ -213,8 +213,11 @@ class MarginBacktester(DynamicBacktester):
         cap = self.margin_config["max_coin_weight"]
         max_gross = self.margin_config["max_leverage"]
         deadband = self.margin_config.get("rebalance_threshold", 0.0)
+        # decision_lag: decide on information as of `lag` bars earlier
+        # (execution-delay / implementation-bias sensitivity testing)
+        lag = self.margin_config.get("decision_lag", 0)
         for t in range(first_trade, len(grid) - 1):
-            history = panel[:, :, t - self.window + 1:t + 1]
+            history = panel[:, :, t - lag - self.window + 1:t - lag + 1]
             w = self.eiie.decide_by_history(history, omega.copy())
             w = self._apply_gates(panel, t, np.asarray(w, dtype=np.float64))
             w = w * self._overlay_scale(panel, t, w, state)
@@ -227,8 +230,11 @@ class MarginBacktester(DynamicBacktester):
                 span = panel[:, :, t - atr_periods + 1:t + 1]
                 self._atr_fraction = np.mean(span[1] - span[2], axis=1) / \
                     np.maximum(panel[0, :, t], 1e-12)
+            w = self._apply_entry_windows(state, int(grid[t]), w, omega)
             w = self._apply_stops(state, coins, panel[0, :, t],
                                   int(grid[t]), w)
+            w = self._apply_exit_policies(state, coins, panel[0, :, t],
+                                          int(grid[t]), w)
             # execution deadband: skip rebalances too small to pay for -
             # tiny decision noise otherwise churns commissions all day
             if t != first_trade and np.abs(w - omega).sum() < deadband:
@@ -321,6 +327,9 @@ class MarginBacktester(DynamicBacktester):
             # volatility instead of a fixed percentage
             if atr_mult:
                 stop = atr_mult * self._atr_fraction[i]
+            # asymmetric stops (#13): dedicated (tighter) short-side stop
+            if sign < 0 and self.margin_config.get("short_stop"):
+                stop = self.margin_config["short_stop"]
             # profit ratchet: once a position's favourable move exceeds
             # `gain`, tighten the trailing stop to lock in blow-off tops
             effective_stop = stop
@@ -338,8 +347,76 @@ class MarginBacktester(DynamicBacktester):
                 hit = closes[i] > held["extreme"] * (1.0 + effective_stop)
             if hit:
                 w[i] = 0.0
-                blocked[coin] = now + cooldown
+                # three-strikes (#18): repeated stop-outs in one coin within
+                # 30 days lock it out for 30 days
+                strikes = state.setdefault("stop_strikes", {})
+                history = [s for s in strikes.get(coin, [])
+                           if now - s < 30 * DAY] + [now]
+                strikes[coin] = history
+                lockout = self.margin_config.get("three_strikes", 0)
+                if lockout and len(history) >= 2:
+                    blocked[coin] = now + lockout * DAY
+                else:
+                    blocked[coin] = now + cooldown
                 tracker.pop(coin, None)
+        return w
+
+    def _apply_entry_windows(self, state, now, w, omega):
+        """Time-based entry restrictions (new entries only, holds untouched).
+
+        ``margin.entry_hours``: UTC hours at which new entries may open
+        (e.g. [0, 8, 16], the funding settlements). ``margin.no_weekend``:
+        no new entries Saturday/Sunday.
+        """
+        hours = self.margin_config.get("entry_hours")
+        no_weekend = self.margin_config.get("no_weekend", False)
+        if not hours and not no_weekend:
+            return w
+        ts = pd.Timestamp(now, unit="s")
+        blocked_time = (hours and ts.hour not in hours) or \
+                       (no_weekend and ts.dayofweek >= 5)
+        if not blocked_time:
+            return w
+        entering = (np.sign(w) != np.sign(omega)) & (np.sign(w) != 0)
+        return np.where(entering, omega, w)
+
+    def _apply_exit_policies(self, state, coins, closes, now, w):
+        """Staleness exit and partial profit-taking (registered #14, #15).
+
+        * ``margin.stale_days`` / ``margin.stale_min_gain``: close any
+          position older than ``stale_days`` whose unrealized move is
+          below ``stale_min_gain``;
+        * ``margin.partial_gain`` / ``margin.partial_keep``: once a
+          position's move exceeds ``partial_gain``, cap its weight at
+          ``partial_keep`` of its current value (bank the rest).
+        """
+        stale_days = self.margin_config.get("stale_days", 0)
+        partial_gain = self.margin_config.get("partial_gain", 0.0)
+        if not stale_days and not partial_gain:
+            return w
+        book = state.setdefault("position_book", {})
+        for i, coin in enumerate(coins):
+            sign = np.sign(w[i])
+            entry = book.get(coin)
+            if sign == 0:
+                book.pop(coin, None)
+                continue
+            if entry is None or entry["sign"] != sign:
+                book[coin] = {"sign": sign, "price": closes[i], "ts": now,
+                              "banked": False}
+                continue
+            move = (closes[i] / entry["price"] - 1.0) * entry["sign"]
+            if stale_days and now - entry["ts"] > stale_days * DAY and \
+                    move < self.margin_config.get("stale_min_gain", 0.10):
+                w[i] = 0.0
+                book.pop(coin, None)
+                continue
+            if partial_gain and move >= partial_gain and not entry["banked"]:
+                entry["banked"] = True
+            if entry.get("banked"):
+                keep = self.margin_config.get("partial_keep", 0.5)
+                limit = keep * abs(w[i]) + 1e-12
+                w[i] = np.clip(w[i], -limit, limit)
         return w
 
     # --------------------------------------------------------------- report

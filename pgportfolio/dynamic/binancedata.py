@@ -82,7 +82,7 @@ class BinanceArchive(object):
     def _initialize_db(self):
         with self._connect() as connection:
             cursor = connection.cursor()
-            for table in ("daily", "klines30m"):
+            for table in ("daily", "klines30m", "klines_perp4h"):
                 cursor.execute(
                     "CREATE TABLE IF NOT EXISTS {} (symbol VARCHAR(20), ts INTEGER,"
                     " open FLOAT, high FLOAT, low FLOAT, close FLOAT,"
@@ -133,7 +133,14 @@ class BinanceArchive(object):
     def _month_prefix(symbol, interval):
         if interval == "fundingRate":
             return "data/futures/um/monthly/fundingRate/{}/".format(symbol)
+        if interval == "perp4h":
+            return "data/futures/um/monthly/klines/{}/4h/".format(symbol)
         return "data/spot/monthly/klines/{}/{}/".format(symbol, interval)
+
+    @staticmethod
+    def _table_for(interval):
+        return {"1d": "daily", "30m": "klines30m",
+                "perp4h": "klines_perp4h"}[interval]
 
     def list_symbol_months(self, symbol, interval):
         """Which monthly zip files exist for a symbol/interval (cached)."""
@@ -210,11 +217,12 @@ class BinanceArchive(object):
                     (symbol, interval, month, len(rows)))
                 connection.commit()
             return len(rows)
-        url = "{}/data/spot/monthly/klines/{}/{}/{}-{}-{}.zip".format(
-            ARCHIVE_HOST, symbol, interval, symbol, interval, month)
+        suffix = "4h" if interval == "perp4h" else interval
+        url = "{}/{}{}-{}-{}.zip".format(
+            ARCHIVE_HOST, self._month_prefix(symbol, interval), symbol, suffix, month)
         content = self._get(url)
         rows = self._parse_kline_zip(content) if content is not None else []
-        table = "daily" if interval == "1d" else "klines30m"
+        table = self._table_for(interval)
         with self._db_lock, self._connect() as connection:
             connection.executemany(
                 "INSERT OR REPLACE INTO {} VALUES (?,?,?,?,?,?,?,?,?,?);".format(table),
@@ -277,7 +285,7 @@ class BinanceArchive(object):
 
     def read_frame(self, symbol, interval, start_ts=None, end_ts=None):
         """Read cached candles as a DataFrame indexed by open-time (seconds)."""
-        table = "daily" if interval == "1d" else "klines30m"
+        table = self._table_for(interval)
         query = "SELECT ts, open, high, low, close, volume, quote_volume," \
                 " trades, taker_buy FROM {} WHERE symbol=?".format(table)
         args = [symbol]

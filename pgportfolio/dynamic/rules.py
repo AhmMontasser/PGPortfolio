@@ -204,8 +204,10 @@ class RegimeTrend(RuleAgentBase):
     def __init__(self, period_seconds, regime_fast_days=20, regime_slow_days=50,
                  slope_days=0, long_entry_days=20, long_exit_days=10,
                  short_entry_days=20, short_exit_days=10, short_scale=1.0,
-                 market_gate_days=0, vol_days=30, target_gross=1.0):
+                 market_gate_days=0, vol_days=30, target_gross=1.0,
+                 rs_vs_btc=False):
         RuleAgentBase.__init__(self, period_seconds, vol_days, target_gross)
+        self._rs_vs_btc = rs_vs_btc
         self._regime_fast = _periods(regime_fast_days, period_seconds)
         self._regime_slow = _periods(regime_slow_days, period_seconds)
         self._slope = _periods(slope_days, period_seconds) if slope_days else 0
@@ -227,6 +229,10 @@ class RegimeTrend(RuleAgentBase):
                 break
 
     def _regimes(self, close):
+        if self._rs_vs_btc and self._btc_index is not None:
+            # regime on the coin/BTC ratio: pure relative strength, immune
+            # to the market-wide tide (#12)
+            close = close / np.maximum(close[self._btc_index], 1e-12)
         last = close[:, -1]
         slow = self._ma(close, self._regime_slow)
         fast = self._ma(close, self._regime_fast)
@@ -361,9 +367,15 @@ class EntryFilterGate(object):
     def __init__(self, period_seconds, member, mtf_confirm_days=0,
                  volume_confirm=0.0, volume_channel=4,
                  overextension_atr=0.0, overextension_ma_days=20,
-                 atr_days=14, flow_confirm_days=0.0, flow_channel=4):
+                 atr_days=14, flow_confirm_days=0.0, flow_channel=4,
+                 funding_shock=0.0, funding_channel=3,
+                 basis_gate=0.0, basis_channel=4):
         self._member = build_rule_agent(member, period_seconds)
         self._period = period_seconds
+        self._funding_shock = funding_shock
+        self._funding_channel = funding_channel
+        self._basis_gate = basis_gate
+        self._basis_channel = basis_channel
         self._flow = _periods(flow_confirm_days, period_seconds) \
             if flow_confirm_days else 0
         self._flow_channel = flow_channel
@@ -394,6 +406,17 @@ class EntryFilterGate(object):
             # with the trade direction (buyers in control for longs)
             imbalance = history[self._flow_channel, :, -self._flow:].mean(axis=1)
             allowed &= np.sign(w) == np.sign(imbalance)
+        if self._funding_shock:
+            # positioning shock: funding far from its 3-day mean = unstable
+            funding = history[self._funding_channel]
+            shock = np.abs(funding[:, -1] - funding[:, -18:].mean(axis=1))
+            allowed &= shock <= self._funding_shock
+        if self._basis_gate:
+            # euphoria/panic gate: perp premium blocks longs, discount
+            # blocks shorts
+            basis = history[self._basis_channel, :, -1]
+            allowed &= ~((w > 0) & (basis > self._basis_gate)) & \
+                       ~((w < 0) & (basis < -self._basis_gate))
         if self._volume_confirm:
             volume = history[self._volume_channel]
             average = volume[:, -self._volume_avg:-1].mean(axis=1)
