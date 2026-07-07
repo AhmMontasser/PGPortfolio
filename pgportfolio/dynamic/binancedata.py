@@ -87,7 +87,12 @@ class BinanceArchive(object):
                     "CREATE TABLE IF NOT EXISTS {} (symbol VARCHAR(20), ts INTEGER,"
                     " open FLOAT, high FLOAT, low FLOAT, close FLOAT,"
                     " volume FLOAT, quote_volume FLOAT, trades INTEGER,"
-                    " PRIMARY KEY (symbol, ts));".format(table))
+                    " taker_buy FLOAT, PRIMARY KEY (symbol, ts));".format(table))
+                try:  # migrate older caches in place
+                    cursor.execute(
+                        "ALTER TABLE {} ADD COLUMN taker_buy FLOAT;".format(table))
+                except sqlite3.OperationalError:
+                    pass
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS funding (symbol VARCHAR(20),"
                 " ts INTEGER, rate FLOAT, PRIMARY KEY (symbol, ts));")
@@ -173,7 +178,7 @@ class BinanceArchive(object):
                 ts //= 10 ** 3
             rows.append((ts, float(parts[1]), float(parts[2]), float(parts[3]),
                          float(parts[4]), float(parts[5]), float(parts[7]),
-                         int(parts[8])))
+                         int(parts[8]), float(parts[9])))
         return rows
 
     @staticmethod
@@ -212,7 +217,7 @@ class BinanceArchive(object):
         table = "daily" if interval == "1d" else "klines30m"
         with self._db_lock, self._connect() as connection:
             connection.executemany(
-                "INSERT OR REPLACE INTO {} VALUES (?,?,?,?,?,?,?,?,?);".format(table),
+                "INSERT OR REPLACE INTO {} VALUES (?,?,?,?,?,?,?,?,?,?);".format(table),
                 [(symbol,) + row for row in rows])
             connection.execute(
                 "INSERT OR REPLACE INTO downloaded_months VALUES (?,?,?,?);",
@@ -273,8 +278,8 @@ class BinanceArchive(object):
     def read_frame(self, symbol, interval, start_ts=None, end_ts=None):
         """Read cached candles as a DataFrame indexed by open-time (seconds)."""
         table = "daily" if interval == "1d" else "klines30m"
-        query = "SELECT ts, open, high, low, close, volume, quote_volume, trades" \
-                " FROM {} WHERE symbol=?".format(table)
+        query = "SELECT ts, open, high, low, close, volume, quote_volume," \
+                " trades, taker_buy FROM {} WHERE symbol=?".format(table)
         args = [symbol]
         if start_ts is not None:
             query += " AND ts>=?"

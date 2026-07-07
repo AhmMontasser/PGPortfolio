@@ -361,9 +361,12 @@ class EntryFilterGate(object):
     def __init__(self, period_seconds, member, mtf_confirm_days=0,
                  volume_confirm=0.0, volume_channel=4,
                  overextension_atr=0.0, overextension_ma_days=20,
-                 atr_days=14):
+                 atr_days=14, flow_confirm_days=0.0, flow_channel=4):
         self._member = build_rule_agent(member, period_seconds)
         self._period = period_seconds
+        self._flow = _periods(flow_confirm_days, period_seconds) \
+            if flow_confirm_days else 0
+        self._flow_channel = flow_channel
         self._mtf = _periods(mtf_confirm_days, period_seconds) \
             if mtf_confirm_days else 0
         self._volume_confirm = volume_confirm
@@ -386,6 +389,11 @@ class EntryFilterGate(object):
         if self._mtf:
             roc = np.sign(close[:, -1] - close[:, -self._mtf])
             allowed &= np.sign(w) == roc
+        if self._flow:
+            # order-flow confirmation: recent taker imbalance must agree
+            # with the trade direction (buyers in control for longs)
+            imbalance = history[self._flow_channel, :, -self._flow:].mean(axis=1)
+            allowed &= np.sign(w) == np.sign(imbalance)
         if self._volume_confirm:
             volume = history[self._volume_channel]
             average = volume[:, -self._volume_avg:-1].mean(axis=1)

@@ -177,7 +177,8 @@ class DynamicBacktester(object):
             coin_number=input_config["coin_number"],
             volume_average_days=input_config["volume_average_days"],
             min_history_days=input_config["min_history_days"],
-            quote=self.quote)
+            quote=self.quote,
+            exclude_symbols=input_config.get("exclude_symbols"))
         self.test_start = int(pd.Timestamp(input_config["start_date"], tz="UTC").timestamp())
         self.test_end = int(pd.Timestamp(input_config["end_date"], tz="UTC").timestamp())
         self.train_start = int(pd.Timestamp(input_config["train_start_date"], tz="UTC").timestamp())
@@ -227,7 +228,13 @@ class DynamicBacktester(object):
                 frame = frame.groupby(bucket).agg(
                     {"open": "first", "high": "max", "low": "min",
                      "close": "last", "volume": "sum",
-                     "quote_volume": "sum", "trades": "sum"})
+                     "quote_volume": "sum", "trades": "sum",
+                     "taker_buy": "sum"})
+            if "taker_imb" in self.feature_names:
+                # order-flow imbalance per bar: +1 = all taker buying,
+                # -1 = all taker selling
+                frame["taker_imb"] = (2.0 * frame["taker_buy"] /
+                                      frame["volume"] - 1.0).clip(-1, 1)
             self._frames[coin] = frame
         if "funding" in self.feature_names:
             self._attach_funding()
@@ -265,8 +272,8 @@ class DynamicBacktester(object):
                 series = frame[feature].reindex(index)
                 if feature == "volume":
                     series = series.fillna(0.0)  # no candle = nothing traded
-                elif feature == "funding":
-                    series = series.ffill().fillna(0.0)  # no perp = neutral
+                elif feature in ("funding", "taker_imb"):
+                    series = series.ffill().fillna(0.0)  # missing = neutral
                 else:
                     series = series.ffill().bfill()
                 panel[f, i, :] = series.to_numpy(dtype=np.float32)

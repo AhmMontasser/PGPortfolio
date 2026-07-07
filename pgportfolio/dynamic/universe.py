@@ -64,7 +64,9 @@ def investable(symbol, quote="USDT"):
 
 class UniverseSelector(object):
     def __init__(self, coin_number=10, volume_average_days=30,
-                 min_history_days=45, min_active_days=28, quote="USDT"):
+                 min_history_days=45, min_active_days=28, quote="USDT",
+                 exclude_symbols=()):
+        self._exclude = set(exclude_symbols or ())
         self._coin_number = coin_number
         self._window_days = volume_average_days
         self._min_history_days = min_history_days
@@ -83,7 +85,7 @@ class UniverseSelector(object):
         window_start = decision_ts - self._window_days * DAY
         records = []
         for symbol, frame in daily_frames.items():
-            if not investable(symbol, self._quote):
+            if symbol in self._exclude or not investable(symbol, self._quote):
                 continue
             history = frame[frame.index < decision_ts]
             if len(history) < self._min_history_days:
