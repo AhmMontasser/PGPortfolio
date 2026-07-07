@@ -351,3 +351,51 @@ eroding Sharpe and courting liquidation in gap events. Position sizing
 should be chosen by the operator's true drawdown tolerance; the
 0.8-vol-target variant remains the recommended risk-adjusted
 configuration.
+
+---
+
+# Round 6 — the timeframe grid and the multi-frequency adaptive portfolio
+
+Motivation: the decision-frequency test showed the best bar size is
+regime-dependent (dev 2020-23 ranks 4h ≫ 1h ≫ 30m; holdout 2024-26H1
+ranks 30m ≫ 1h ≫ 4h — a perfect inversion), and with the execution
+deadband, realized turnover (~0.4×/day) is the same at every frequency,
+so the fee argument against fast bars no longer applies. Rather than bet
+on one frequency, round 6 runs the full grid (30m, 1h, 2h, 4h, 8h of the
+identical `r6`-scale system) and allocates across them.
+
+* **Equal weight across the five frequencies** (`dynamic_meta.py`):
+  holdout +74.1%/yr at Sharpe 1.10, year-PnL std down ~37% vs the single
+  4h system, worst calendar year −3.9%, every holdout year positive.
+* **Aggressive online learning fails** (documented negative result): a
+  trailing-Sharpe performance chaser (ADAPTIVE-RAW) underperforms equal
+  weight badly (CAGR 55% vs 94%) — it keeps buying yesterday's winning
+  frequency after the regime has already turned.
+* **Bounded online learning is adopted** (`META-GT`): weights follow each
+  frequency's trailing 30-day-half-life Sharpe but are clamped to
+  [0.5/K, 2/K] around the equal-weight anchor (parameters a priori,
+  standard construction; meta-turnover 0.06/day, negligible cost).
+
+**Final system — `META-GT` (multi-frequency, funding-gated, regime-
+gated, online-tilted):**
+
+| | dev 2020-23 | holdout 2024-26H1 | full |
+|---|---|---|---|
+| CAGR | +106.8% | **+76.8%** | +94.7% |
+| Sharpe | 1.41 | **1.13** | 1.29 |
+| max drawdown | 64.6% | 56.8% | 64.6% |
+
+Per-year: 2020 +291%, 2021 +131%, 2022 **−3.3%**, 2023 +100%,
+2024 +111%, 2025 +66%, 2026H1 +19%. Yearly-PnL std 1.03 vs 1.57 for the
+single-frequency system; worst year −3.3% vs −5.3%.
+
+Versus the goal: **higher OOS PnL (+16%), equal-to-lower drawdown, ~35%
+lower variance between years, and a much smaller dev→holdout decay
+(Sharpe 1.41→1.13 vs 1.61→1.05)** — the diversified system is less
+overfit *by construction* because no single frequency was chosen.
+Online learning contributes at three levels: monthly universe
+re-selection, per-coin regime flips, and the bounded frequency tilt; the
+documented failure of aggressive performance-chasing is part of the
+result. Overfitting guards: all five grid members included (none
+dropped), meta parameters standard and untuned, EW control reported
+alongside.
