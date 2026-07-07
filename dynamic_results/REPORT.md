@@ -399,3 +399,43 @@ documented failure of aggressive performance-chasing is part of the
 result. Overfitting guards: all five grid members included (none
 dropped), meta parameters standard and untuned, EW control reported
 alongside.
+
+## Risk-capped configurations (≤20% max drawdown)
+
+At a fixed Sharpe, PnL and drawdown are one dial; the best PnL under a
+20% cap comes from running the highest-Sharpe stack at reduced capital
+fraction plus a hard drawdown brake (de-risk past 8% trailing-90d
+drawdown, floor at 16%). Strict configuration (k=0.24 of META-GT +
+brake): **full-period MDD 19.8% (2022 included), holdout MDD 14.4%,
+CAGR +22.4%/yr full / +20.0%/yr holdout, every calendar year positive
+(worst +5.5%)**.
+
+---
+
+# Round 7 — structural research on the locked 4h base (negative results)
+
+Locked reference: the 4h system at 0.2 capital fraction — CAGR +20.5%/yr
+full (+15.7% holdout), Sharpe 1.35 (1.02), MDD 18.2% (15.0%), per-year
++46/+21/+4/+27/+19/+13/+8%. Research question: can classic
+indicator-level structure (multi-timeframe confirmation, entry-quality
+filters, adaptive stops, pullback timing) raise the stream's Sharpe?
+
+Nine variants tested; **every one rejected on the dev window, with the
+holdout agreeing** (no selection ambiguity):
+
+| structural change | outcome |
+|---|---|
+| multi-timeframe confirmation (10d ROC agreement on entries) | **no effect at all** — Donchian breakouts already imply higher-timeframe alignment; MTF screens are redundant with channel entries |
+| volume-confirmed breakouts (bar volume ≥ 1.5× 20d avg) | worse both windows — waiting for volume misses the start of the move |
+| overextension filter (skip entries far above trend, 2 calibrations) | worse — in crypto the "overextended" breakouts are often the best trends; don't-chase logic subtracts |
+| ATR-scaled trailing stops (3 calibrations, replacing fixed 8%) | worse, MDD up to 83% — ATR widening loosens stops exactly on the volatile alts that need them; the fixed 8% trail is the right shape here |
+| pullback entries in up-regime (buy dips book) | strongly negative (−93% MDD) — dip-buying holds through crashes; breakout timing is load-bearing |
+
+Research conclusion: the base entry/exit stack (channel breakout +
+100-day regime + funding gate + fixed 8% trailing stop + monthly
+universe re-selection) is **locally optimal against the classic TA
+add-on space**. These negative results are as valuable as a win: they
+document that the obvious "improvements" a practitioner would bolt on
+degrade this system. The structural frontier remains where round 5/6
+found it: new information sources and diversification across
+frequencies/systems, not more indicator logic on the same entries.

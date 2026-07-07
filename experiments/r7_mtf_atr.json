@@ -1,0 +1,93 @@
+{
+ "input": {
+  "quote": "USDT",
+  "coin_number": 10,
+  "trade_period": 14400,
+  "window_size": 620,
+  "feature_number": 4,
+  "volume_average_days": 30,
+  "min_history_days": 45,
+  "train_start_date": "2019/01/01",
+  "start_date": "2020/01/01",
+  "end_date": "2026/07/01",
+  "features": [
+   "close",
+   "high",
+   "low",
+   "funding"
+  ]
+ },
+ "training": {
+  "steps": 0,
+  "rolling_steps": 0,
+  "rolling_lookback_days": 120,
+  "batch_size": 109,
+  "buffer_biased": 5e-05,
+  "learning_rate": 0.00028
+ },
+ "trading": {
+  "trading_consumption": 0.001
+ },
+ "margin": {
+  "max_leverage": 3.5,
+  "max_coin_weight": 0.35,
+  "short_borrow_apr": 0.1,
+  "usdt_borrow_apr": 0.1,
+  "rebalance_threshold": 0.05,
+  "position_stop": 0.0,
+  "stop_cooldown_days": 2,
+  "position_stop_atr": 3.0
+ },
+ "overlay": {
+  "vol_target": 1.5,
+  "vol_window": 180
+ },
+ "data": {
+  "database": "./database/dynamic_data.db",
+  "download_workers": 16
+ },
+ "output": {
+  "directory": "./dynamic_results/exp_r7_mtf_atr"
+ },
+ "rule": {
+  "type": "ensemble",
+  "members": [
+   {
+    "type": "entry_filter",
+    "member": {
+     "type": "funding_gate",
+     "member": {
+      "type": "donchian",
+      "entry_days": 20,
+      "exit_days": 10,
+      "long_only": true,
+      "target_gross": 3.5
+     },
+     "long_max": 0.0005,
+     "short_min": -0.0005
+    },
+    "mtf_confirm_days": 10
+   },
+   {
+    "type": "entry_filter",
+    "member": {
+     "type": "funding_gate",
+     "member": {
+      "type": "regime",
+      "regime_slow_days": 100,
+      "long_entry_days": 9000,
+      "target_gross": 3.5
+     },
+     "long_max": 0.0005,
+     "short_min": -0.0005
+    },
+    "mtf_confirm_days": 10
+   }
+  ],
+  "mix": [
+   0.7,
+   0.3
+  ],
+  "name": "r7_mtf_atr"
+ }
+}

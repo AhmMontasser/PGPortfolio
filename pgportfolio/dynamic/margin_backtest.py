@@ -222,6 +222,11 @@ class MarginBacktester(DynamicBacktester):
             gross = np.abs(w).sum()
             if gross > max_gross:
                 w *= max_gross / gross
+            if self.margin_config.get("position_stop_atr", 0.0):
+                atr_periods = int(14 * DAY / self.period)
+                span = panel[:, :, t - atr_periods + 1:t + 1]
+                self._atr_fraction = np.mean(span[1] - span[2], axis=1) / \
+                    np.maximum(panel[0, :, t], 1e-12)
             w = self._apply_stops(state, coins, panel[0, :, t],
                                   int(grid[t]), w)
             # execution deadband: skip rebalances too small to pay for -
@@ -293,7 +298,8 @@ class MarginBacktester(DynamicBacktester):
         re-entered for ``stop_cooldown_days``.
         """
         stop = self.margin_config.get("position_stop", 0.0)
-        if not stop:
+        atr_mult = self.margin_config.get("position_stop_atr", 0.0)
+        if not stop and not atr_mult:
             return w
         cooldown = self.margin_config.get("stop_cooldown_days", 3) * DAY
         tracker = state.setdefault("stop_tracker", {})
@@ -311,6 +317,10 @@ class MarginBacktester(DynamicBacktester):
                 tracker[coin] = {"sign": sign, "extreme": closes[i],
                                  "entry": closes[i]}
                 continue
+            # ATR-scaled stop: distance adapts to each coin's own current
+            # volatility instead of a fixed percentage
+            if atr_mult:
+                stop = atr_mult * self._atr_fraction[i]
             # profit ratchet: once a position's favourable move exceeds
             # `gain`, tighten the trailing stop to lock in blow-off tops
             effective_stop = stop

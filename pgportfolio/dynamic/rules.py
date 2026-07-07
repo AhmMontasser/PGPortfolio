@@ -337,6 +337,104 @@ class FundingGate(object):
         return w
 
 
+class EntryFilterGate(object):
+    """Blocks *new entries* (not held positions) that fail a quality check.
+
+    Wraps any rule agent. A position change counts as an entry when the
+    target sign differs from the currently held sign; entries failing the
+    active checks are cancelled (weight reverts to the held value), while
+    existing positions are never force-closed by a filter flicker - exits
+    remain governed by the member's own logic and the backtester's stops.
+
+    Checks (any subset):
+    * ``mtf_confirm_days``: multi-timeframe confirmation - the trade
+      direction must agree with the sign of the ``mtf_confirm_days``
+      rate-of-change (a higher-timeframe trend screen);
+    * ``volume_confirm``: the current bar's volume must exceed
+      ``volume_confirm`` x the trailing 20-day average (breakouts without
+      participation are suspect); needs a ``volume`` feature channel;
+    * ``overextension_atr``: entry price must be within this many ATRs of
+      the ``overextension_ma_days`` moving average (don't chase moves that
+      already ran).
+    """
+
+    def __init__(self, period_seconds, member, mtf_confirm_days=0,
+                 volume_confirm=0.0, volume_channel=4,
+                 overextension_atr=0.0, overextension_ma_days=20,
+                 atr_days=14):
+        self._member = build_rule_agent(member, period_seconds)
+        self._period = period_seconds
+        self._mtf = _periods(mtf_confirm_days, period_seconds) \
+            if mtf_confirm_days else 0
+        self._volume_confirm = volume_confirm
+        self._volume_channel = volume_channel
+        self._volume_avg = _periods(20, period_seconds)
+        self._overext = overextension_atr
+        self._overext_ma = _periods(overextension_ma_days, period_seconds)
+        self._atr = _periods(atr_days, period_seconds)
+
+    def begin_month(self, coins):
+        if hasattr(self._member, "begin_month"):
+            self._member.begin_month(coins)
+
+    def decide_by_history(self, history, last_w):
+        w = np.asarray(self._member.decide_by_history(history, last_w),
+                       dtype=np.float64)
+        close = history[0]
+        entering = (np.sign(w) != np.sign(last_w)) & (np.sign(w) != 0)
+        allowed = np.ones_like(w, dtype=bool)
+        if self._mtf:
+            roc = np.sign(close[:, -1] - close[:, -self._mtf])
+            allowed &= np.sign(w) == roc
+        if self._volume_confirm:
+            volume = history[self._volume_channel]
+            average = volume[:, -self._volume_avg:-1].mean(axis=1)
+            allowed &= volume[:, -1] >= self._volume_confirm * \
+                np.maximum(average, 1e-12)
+        if self._overext:
+            high, low = history[1], history[2]
+            atr = np.mean(high[:, -self._atr:] - low[:, -self._atr:], axis=1)
+            ma = close[:, -self._overext_ma:].mean(axis=1)
+            distance = np.abs(close[:, -1] - ma) / np.maximum(atr, 1e-12)
+            allowed &= distance <= self._overext
+        blocked = entering & ~allowed
+        return np.where(blocked, last_w, w)
+
+
+class PullbackTrend(RuleAgentBase):
+    """Buy weakness inside an up-regime (and sell strength in a down one).
+
+    Entry-timing complement to breakout books: in an up regime (100d MA
+    stack) a long is opened when price closes *below* the fast MA (a dip),
+    and held while the regime lasts; symmetric for shorts unless
+    ``long_only``. Uses the same inverse-vol sizing as the other books.
+    """
+
+    def __init__(self, period_seconds, regime_fast_days=20,
+                 regime_slow_days=100, dip_ma_days=10, long_only=False,
+                 vol_days=30, target_gross=1.0):
+        RuleAgentBase.__init__(self, period_seconds, vol_days, target_gross)
+        self._fast = _periods(regime_fast_days, period_seconds)
+        self._slow = _periods(regime_slow_days, period_seconds)
+        self._dip = _periods(dip_ma_days, period_seconds)
+        self._long_only = long_only
+
+    def decide_by_history(self, history, last_w):
+        close = history[0]
+        last = close[:, -1]
+        slow = self._ma(close, self._slow)
+        fast = self._ma(close, self._fast)
+        dip = self._ma(close, self._dip)
+        up = (last > slow) & (fast > slow)
+        down = (last < slow) & (fast < slow)
+        held = np.sign(last_w)
+        signal = np.zeros_like(last)
+        signal[up & ((last < dip) | (held > 0))] = 1.0
+        if not self._long_only:
+            signal[down & ((last > dip) | (held < 0))] = -1.0
+        return self._inverse_vol_size(signal, close)
+
+
 class BreadthEnsemble(object):
     """Regime-breadth-adaptive allocation between a long and a short book.
 
@@ -393,6 +491,10 @@ def build_rule_agent(rule_config, period_seconds):
         return FundingCarry(period_seconds, **params)
     if kind == "funding_gate":
         return FundingGate(period_seconds, **params)
+    if kind == "entry_filter":
+        return EntryFilterGate(period_seconds, **params)
+    if kind == "pullback":
+        return PullbackTrend(period_seconds, **params)
     if kind == "ensemble":
         return Ensemble(period_seconds, **params)
     raise ValueError("unknown rule agent type %r" % kind)
