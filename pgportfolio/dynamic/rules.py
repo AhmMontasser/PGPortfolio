@@ -178,6 +178,90 @@ class XSMomentum(RuleAgentBase):
         return self._inverse_vol_size(signal, close)
 
 
+class RegimeTrend(RuleAgentBase):
+    """Per-coin trend-regime detector with asymmetric long/short books.
+
+    Every coin is classified each period into one of three regimes from its
+    own moving averages:
+
+    * **up**:      close > MA(regime_slow) and MA(regime_fast) > MA(regime_slow)
+    * **down**:    close < MA(regime_slow) and MA(regime_fast) < MA(regime_slow)
+    * **neutral**: anything else -> the coin is not traded at all
+
+    (with ``slope_days`` set, the slow MA must additionally be rising /
+    falling over that window - a stricter regime definition).
+
+    Inside its regime a coin trades a Donchian channel on that side only:
+    longs enter on the ``long_entry_days`` high and exit on the
+    ``long_exit_days`` low; shorts enter on the ``short_entry_days`` low
+    and exit on the ``short_exit_days`` high, scaled by ``short_scale``
+    (bear-market rallies are violent, so half-sized, quick-exit shorts are
+    a common choice).  ``market_gate_days``: shorts are additionally only
+    allowed while BTC itself is below its own gate MA - bear years are
+    market-wide, bull-market dips are not.
+    """
+
+    def __init__(self, period_seconds, regime_fast_days=20, regime_slow_days=50,
+                 slope_days=0, long_entry_days=20, long_exit_days=10,
+                 short_entry_days=20, short_exit_days=10, short_scale=1.0,
+                 market_gate_days=0, vol_days=30, target_gross=1.0):
+        RuleAgentBase.__init__(self, period_seconds, vol_days, target_gross)
+        self._regime_fast = _periods(regime_fast_days, period_seconds)
+        self._regime_slow = _periods(regime_slow_days, period_seconds)
+        self._slope = _periods(slope_days, period_seconds) if slope_days else 0
+        self._long_entry = _periods(long_entry_days, period_seconds)
+        self._long_exit = _periods(long_exit_days, period_seconds)
+        self._short_entry = _periods(short_entry_days, period_seconds)
+        self._short_exit = _periods(short_exit_days, period_seconds)
+        self._short_scale = short_scale
+        self._market_gate = (_periods(market_gate_days, period_seconds)
+                             if market_gate_days else 0)
+        self._btc_index = None
+
+    def begin_month(self, coins):
+        RuleAgentBase.begin_month(self, coins)
+        self._btc_index = None
+        for i, coin in enumerate(coins):
+            if coin.startswith("BTC"):
+                self._btc_index = i
+                break
+
+    def _regimes(self, close):
+        last = close[:, -1]
+        slow = self._ma(close, self._regime_slow)
+        fast = self._ma(close, self._regime_fast)
+        up = (last > slow) & (fast > slow)
+        down = (last < slow) & (fast < slow)
+        if self._slope:
+            past_slow = close[:, :-self._slope]
+            old = past_slow[:, -self._regime_slow:].mean(axis=1)
+            up &= slow > old
+            down &= slow < old
+        return up, down
+
+    def decide_by_history(self, history, last_w):
+        close = history[0]
+        last = close[:, -1]
+        up, down = self._regimes(close)
+        held = np.sign(last_w)
+        signal = np.zeros_like(last)
+
+        long_break = last >= close[:, -self._long_entry - 1:-1].max(axis=1)
+        long_hold = (held > 0) & (last > close[:, -self._long_exit - 1:-1].min(axis=1))
+        signal[up & (long_break | long_hold)] = 1.0
+
+        short_break = last <= close[:, -self._short_entry - 1:-1].min(axis=1)
+        short_hold = (held < 0) & (last < close[:, -self._short_exit - 1:-1].max(axis=1))
+        shorts = down & (short_break | short_hold)
+        if self._market_gate and self._btc_index is not None:
+            btc = close[self._btc_index]
+            btc_bear = btc[-1] < btc[-self._market_gate:].mean()
+            if not btc_bear:
+                shorts &= False
+        signal[shorts] = -self._short_scale
+        return self._inverse_vol_size(signal, close)
+
+
 class Ensemble(object):
     """Averages the signed weights of several rule agents (diversification
     across signal families)."""
@@ -210,6 +294,8 @@ def build_rule_agent(rule_config, period_seconds):
         return Donchian(period_seconds, **params)
     if kind == "xsmom":
         return XSMomentum(period_seconds, **params)
+    if kind == "regime":
+        return RegimeTrend(period_seconds, **params)
     if kind == "ensemble":
         return Ensemble(period_seconds, **params)
     raise ValueError("unknown rule agent type %r" % kind)

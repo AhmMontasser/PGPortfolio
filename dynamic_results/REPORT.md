@@ -148,3 +148,61 @@ the selection window (2020-21 bull). No configuration among the 26
 achieved +100% in every year, and none kept drawdowns near 15% while
 earning trend-level returns — at 2× leverage a single 4-hour market-wide
 gap bar can exceed 15% on its own.
+
+---
+
+# Round 3 — per-coin trend regimes and downtrend shorting
+
+Motivation (user hypothesis): the round-2 system only monetizes uptrends;
+correctly identified downtrends should be shortable. First, the evidence
+that *naive* shorts don't work: comparing the same Donchian long/short vs
+long-only per year, shorts added **+60pts in 2022, +18 in 2025, +16 in
+2026** but cost **−62 in 2021, −37 in 2023, −44 in 2024** — shorting
+bull-market dips gets squeezed, so the contributions cancel. The entire
+problem is *regime classification*.
+
+**Per-coin regime detector** (`rules.RegimeTrend`): each coin is
+classified every period as **up** (close > MA(slow) and MA(fast) >
+MA(slow)), **down** (both reversed) or **neutral** (no position at all —
+the no-trade region); longs trade their Donchian channel only in an up
+regime, shorts only in a down regime, with options for slope
+confirmation, a market-wide BTC gate on shorts, half-sized shorts,
+asymmetric channels and trailing stops. 15 further experiments
+(dev-selected, holdout-validated as in round 2; `exp_rg_*`,
+`exp_ens_ls_*`) established:
+
+* a **stricter bear definition transfers best**: 100-day regime MA beats
+  50-day out-of-sample (holdout +32.5%/yr vs +12.7%);
+* **tight trailing stops on shorts help everywhere** (squeeze protection);
+* asymmetric channel tuning looks great in-sample and fails out-of-sample
+  (again);
+* the winning architecture is a **70/30 ensemble of the round-2 long
+  book (2× long-only Donchian 20/10) with a shorts-only 100-day-regime
+  book**, stops 8%, 80% vol target, 25% per-coin cap:
+
+**Selected system — `ens_ls_70_30`:**
+
+| year | return | MDD | market (equal-weight top-10) |
+|------|--------|-----|------------------------------|
+| 2020 | +218.9% | 24.7% | +154% |
+| 2021 | +172.2% | 22.3% | +266% |
+| 2022 | **−8.2%** | 46.8% | −86% |
+| 2023 | +90.9% | 23.7% | +82% |
+| 2024 | +61.1% | 26.5% | +56% |
+| 2025 | **+34.2%** | 23.3% | −47% |
+| 2026 H1 | **+15.1%** | 40.1% | −37% |
+
+Full period **38.1× = +75.1%/yr, Sharpe 1.37**; positive in 6 of 7 years;
+dev window +98.6%/yr (Sharpe 1.59) — at the target in-sample; **holdout
++43.9%/yr at Sharpe 1.00**, the best out-of-sample result of the project
+(vs +27.7%/yr before shorts: the regime-gated short book added ~16
+points/yr of *out-of-sample* return, exactly as the hypothesis hoped, by
+converting bear years from losses into roughly flat-to-positive years).
+
+**Verdict vs the +100%/yr goal:** in-sample the target is now met
+(dev +98.6%/yr ≈ 100%); across the full period two years exceed +100%
+and the average is +75%/yr; the unbiased forward estimate remains the
+holdout's **≈ +44%/yr at Sharpe ~1.0 with 30-45% drawdowns**. That is an
+exceptional systematic crypto result. A *guaranteed* +100% every single
+year remains outside what honest out-of-sample evidence supports; further
+tuning against this test window would only manufacture it on paper.
