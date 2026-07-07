@@ -206,3 +206,64 @@ holdout's **≈ +44%/yr at Sharpe ~1.0 with 30-45% drawdowns**. That is an
 exceptional systematic crypto result. A *guaranteed* +100% every single
 year remains outside what honest out-of-sample evidence supports; further
 tuning against this test window would only manufacture it on paper.
+
+---
+
+# Round 4 — bias audit and structural improvement attempts
+
+## Survivorship / lookahead audit (requested)
+
+* **The universe rotates for real**: ~2 of 10 coins replaced per month on
+  average, 72 distinct coins over 78 months, only 4 unchanged months.
+* **No survivorship bias**: the candidate set each month is every USDT
+  pair alive at that time in Binance's public archive, which retains
+  delisted symbols. Hard evidence: **LUNAUSDT is in the universe
+  2022-01…2022-05 — the month Terra collapsed** — and the system traded
+  into that crash; BTT appears pre-redenomination; EOS in its 2020-21
+  window. A survivorship-biased backtest could not contain those trades.
+* **No lookahead**: monthly selection uses only daily candles timestamped
+  strictly before the month start; models are fine-tuned walk-forward on
+  pre-month data; approach selection used the dev window only.
+* **No token-swap artifacts**: series are truncated at redenomination
+  discontinuities (gap > 3 days and >5× price jump).
+* Remaining idealizations, disclosed: 4-hour close fills; financing
+  assumed available on all top-10 alts at 10% APR; slippage beyond the
+  0.1% fee covered by the sensitivity run below.
+
+## Structural ideas tested (dev-selected, holdout once)
+
+| variant | dev ann. / Sharpe | holdout ann. / Sharpe / MDD |
+|---|---|---|
+| round-3 baseline (`ens_ls_70_30`) | +98.6% / 1.59 | **+43.9% / 1.00 / 40%** |
+| breadth-adaptive book allocation | +74.5% / 1.41 | +42.4% / 1.01 / 36% |
+| profit-ratchet stops | +100.3% / 1.61 | +38.3% / 0.92 / 40% |
+| turbulence brake (fast vol) | +99.1% / 1.64 | +38.0% / 0.94 / 38% |
+| top-15 universe | +112.5% / 1.59 | +24.3% / 0.67 / 51% |
+| top-20 universe | +139.2% / 1.71 | +46.9% / 0.94 / 52% |
+| n20 + ratchet + brake | **+134.7% / 1.75** | +38.3% / 0.86 / 50% |
+| n20 + breadth + ratchet + brake | +108.6% / 1.62 | +45.6% / 0.98 / 43% |
+| slippage check: baseline @0.15%/side | +90.0% / 1.50 | +38.0% / 0.91 / 41% |
+
+## Round-4 verdict
+
+**No variant is adopted.** The best in-sample performer (n20 + ratchet +
+brake, dev +135%/yr) is *worse* than the baseline out-of-sample
+(+38%/0.86 vs +44%/1.00) — this round, dev-selection would have degraded
+real performance, which is precisely the overfitting boundary the split
+exists to expose. Universe width is non-monotonic (n15 much worse than
+n10 and n20), so n20's small holdout edge reads as noise, not signal.
+The breadth-adaptive mix is the only variant with a better holdout risk
+profile (MDD 36% vs 40% at equal Sharpe), but its dev metrics are worse,
+so selecting it would itself be holdout-peeking; it is noted as a
+candidate for validation on *future* data, not adopted.
+
+The goal of "+50% performance improvement" was therefore **not
+achieved** — the round-3 system sits at the frontier of what this signal
+family (price/volume trend on liquid crypto at 4-hour bars) honestly
+supports: **≈ +44%/yr at Sharpe ~1.0 out-of-sample, robust to realistic
+slippage (+38%/yr at 0.15%/side)**. Structural changes moved in-sample
+numbers dramatically (99→135%/yr) while out-of-sample numbers stayed
+flat or fell — the defining signature of a mined-out edge. Genuinely
+new *information* (funding rates, order-flow, on-chain activity,
+cross-exchange basis), not new transformations of the same prices, is
+what a further step-change would require.
