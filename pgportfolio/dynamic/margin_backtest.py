@@ -42,6 +42,14 @@ class MarginBacktester(DynamicBacktester):
 
     def make_agents(self):
         margin = self.margin_config
+        rule = self.config.get("rule")
+        if rule:
+            from pgportfolio.dynamic.rules import build_rule_agent
+            self.eiie = build_rule_agent(rule, self.period)
+            self.is_rule_agent = True
+            self.agents = []
+            return self.agents
+        self.is_rule_agent = False
         network = self.config.get("network", {})
         self.eiie = MarginEIIEAgent(
             conv_filters=network.get("conv_filters", 3),
@@ -60,6 +68,12 @@ class MarginBacktester(DynamicBacktester):
         self.agents = []
         return self.agents
 
+    def initial_training(self):
+        if getattr(self, "is_rule_agent", False) or \
+                self.config["training"]["steps"] <= 0:
+            return  # rule agents have nothing to train
+        DynamicBacktester.initial_training(self)
+
     # ---------------------------------------------------------------- run
 
     def run(self):
@@ -76,7 +90,10 @@ class MarginBacktester(DynamicBacktester):
             "turnover": [], "coins": None, "omega": None, "bust": False,
             "equity": [],
         }
-        borrow = (self.eiie._short_borrow, self.eiie._usdt_borrow)
+        periods_per_day = DAY / self.period
+        borrow = (
+            self.margin_config["short_borrow_apr"] / 365.0 / periods_per_day,
+            self.margin_config["usdt_borrow_apr"] / 365.0 / periods_per_day)
 
         for month_index, month_ts in enumerate(self.month_starts):
             if state["bust"]:
@@ -86,13 +103,15 @@ class MarginBacktester(DynamicBacktester):
                          if month_index + 1 < len(self.month_starts)
                          else self.test_end)
             rolling_steps = train_config["rolling_steps"]
-            if rolling_steps > 0:
+            if rolling_steps > 0 and not getattr(self, "is_rule_agent", False):
                 train_panel = self.build_panel(coins, month_ts - lookback, month_ts)
                 self.eiie.train_on_panel(
                     train_panel, rolling_steps,
                     batch_size=train_config["batch_size"],
                     sample_bias=train_config["buffer_biased"],
                     log_every=0, tag="rolling")
+            if hasattr(self.eiie, "begin_month"):
+                self.eiie.begin_month(coins)
 
             warmup_periods = max(self.window + 1,
                                  self.overlay.get("vol_window", 336) + 1)
@@ -107,8 +126,10 @@ class MarginBacktester(DynamicBacktester):
                          pd.Timestamp(month_ts, unit="s").strftime("%Y-%m"),
                          state["pv"], 1 - state["pv"] / state["peak"])
 
+        label = self.config.get("rule", {}).get("name") or \
+            self.config.get("rule", {}).get("type") or "EIIE-LS"
         self.results = {
-            "EIIE-LS": {
+            label: {
                 "pv": state["pv"],
                 "pc_vector": np.array(state["pc"], dtype=np.float64),
                 "times": np.array(state["times"], dtype=np.int64),
@@ -188,11 +209,14 @@ class MarginBacktester(DynamicBacktester):
         for t in range(first_trade, len(grid) - 1):
             history = panel[:, :, t - self.window + 1:t + 1]
             w = self.eiie.decide_by_history(history, omega.copy())
+            w = self._apply_gates(panel, t, np.asarray(w, dtype=np.float64))
             w = w * self._overlay_scale(panel, t, w, state)
             w = np.clip(w, -cap, cap)
             gross = np.abs(w).sum()
             if gross > max_gross:
                 w *= max_gross / gross
+            w = self._apply_stops(state, coins, panel[0, :, t],
+                                  int(grid[t]), w)
             # execution deadband: skip rebalances too small to pay for -
             # tiny decision noise otherwise churns commissions all day
             if t != first_trade and np.abs(w - omega).sum() < deadband:
@@ -231,6 +255,66 @@ class MarginBacktester(DynamicBacktester):
 
         state["coins"], state["omega"] = list(coins), omega
 
+    # ----------------------------------------------------- gates and stops
+
+    def _apply_gates(self, panel, t, w):
+        """Per-coin no-trade filters applied to the raw decision.
+
+        * ``overlay.trend_gate_days``: positions are only allowed in the
+          direction of each coin's own moving-average trend (long above,
+          short below) - "trade with the tide or not at all";
+        * ``overlay.min_weight``: signals smaller than this fraction of
+          equity are treated as noise and zeroed (no-trade region).
+        """
+        gate_days = self.overlay.get("trend_gate_days", 0)
+        if gate_days:
+            periods = int(gate_days * DAY / self.period)
+            closes = panel[0, :, max(0, t - periods):t + 1]
+            trend = np.sign(panel[0, :, t] - closes.mean(axis=1))
+            w = np.where(np.sign(w) == trend, w, 0.0)
+        min_weight = self.overlay.get("min_weight", 0.0)
+        if min_weight:
+            w = np.where(np.abs(w) >= min_weight, w, 0.0)
+        return w
+
+    def _apply_stops(self, state, coins, closes, now, w):
+        """Trailing per-position stop-loss with cooldown.
+
+        A long is stopped out when its price falls ``position_stop`` below
+        the highest close seen since the position was opened (shorts
+        symmetric from the lowest close).  A stopped coin cannot be
+        re-entered for ``stop_cooldown_days``.
+        """
+        stop = self.margin_config.get("position_stop", 0.0)
+        if not stop:
+            return w
+        cooldown = self.margin_config.get("stop_cooldown_days", 3) * DAY
+        tracker = state.setdefault("stop_tracker", {})
+        blocked = state.setdefault("stop_until", {})
+        for i, coin in enumerate(coins):
+            if blocked.get(coin, 0) > now:
+                w[i] = 0.0
+                continue
+            sign = np.sign(w[i])
+            held = tracker.get(coin)
+            if sign == 0:
+                tracker.pop(coin, None)
+                continue
+            if held is None or held["sign"] != sign:
+                tracker[coin] = {"sign": sign, "extreme": closes[i]}
+                continue
+            if sign > 0:
+                held["extreme"] = max(held["extreme"], closes[i])
+                hit = closes[i] < held["extreme"] * (1.0 - stop)
+            else:
+                held["extreme"] = min(held["extreme"], closes[i])
+                hit = closes[i] > held["extreme"] * (1.0 + stop)
+            if hit:
+                w[i] = 0.0
+                blocked[coin] = now + cooldown
+                tracker.pop(coin, None)
+        return w
+
     # --------------------------------------------------------------- report
 
     def summary(self):
@@ -241,7 +325,9 @@ class MarginBacktester(DynamicBacktester):
                     np.mean(result["gross"]))
         return frame
 
-    def yearly_table(self, name="EIIE-LS"):
+    def yearly_table(self, name=None):
+        if name is None:
+            name = next(iter(self.results))
         result = self.results[name]
         series = pd.Series(result["pc_vector"],
                            index=pd.to_datetime(result["times"], unit="s"))

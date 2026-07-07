@@ -52,8 +52,49 @@ def describe(directory):
     return summary, frames
 
 
+def split_stats(directory, split="2024-01-01"):
+    """Development vs holdout metrics for the first (or only) curve."""
+    curves = pd.read_csv(os.path.join(directory, "portfolio_values.csv"),
+                         index_col=0, parse_dates=True)
+    curve = curves[curves.columns[0]].dropna()
+    rows = {}
+    for label, chunk in (("dev", curve[:split]), ("holdout", curve[split:])):
+        if len(chunk) < 10:
+            continue
+        equity = chunk / chunk.iloc[0]
+        rets = equity.pct_change().dropna()
+        years = (chunk.index[-1] - chunk.index[0]).days / 365.25
+        periods_per_year = len(rets) / years
+        peaks = equity.cummax()
+        rows[label] = {
+            "total": float(equity.iloc[-1]) - 1.0,
+            "annualized": float(equity.iloc[-1]) ** (1 / years) - 1.0,
+            "sharpe": float(rets.mean() / rets.std() * (periods_per_year ** 0.5)),
+            "mdd": float((1 - equity / peaks).max()),
+        }
+    return curves.columns[0], pd.DataFrame(rows).T
+
+
 def main():
-    for directory in sys.argv[1:]:
+    args = sys.argv[1:]
+    split = None
+    if args and args[0].startswith("--split"):
+        split = args.pop(0).split("=")[1] if "=" in args[0] else "2024-01-01"
+    if split:
+        table = {}
+        for directory in args:
+            try:
+                name, stats = split_stats(directory, split)
+            except Exception as e:
+                print("%-24s ERROR %s" % (directory, e))
+                continue
+            for period_label, row in stats.iterrows():
+                table[(os.path.basename(directory), period_label)] = row
+        frame = pd.DataFrame(table).T
+        frame.index.names = ["run", "window"]
+        print(frame.to_string(float_format=lambda v: "%8.3f" % v))
+        return
+    for directory in args:
         print("=" * 70)
         print(directory)
         print("=" * 70)
