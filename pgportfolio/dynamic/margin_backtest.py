@@ -239,6 +239,17 @@ class MarginBacktester(DynamicBacktester):
             # tiny decision noise otherwise churns commissions all day
             if t != first_trade and np.abs(w - omega).sum() < deadband:
                 w = omega.copy()
+            # exchange minimums (audit): orders below min_notional cannot be
+            # placed - the sub-minimum part of any rebalance is skipped, so
+            # too-small positions persist as dust until they grow or the
+            # account can trade them (trading.initial_capital_usdt enables)
+            capital = self.config["trading"].get("initial_capital_usdt", 0)
+            if capital:
+                equity = capital * state["pv"]
+                min_notional = self.config["trading"].get("min_notional", 10.0)
+                too_small = (np.abs(w - omega) * equity > 0) & \
+                            (np.abs(w - omega) * equity < min_notional)
+                w = np.where(too_small, omega, w)
             y = np.clip(panel[0, :, t + 1] / panel[0, :, t], 0.05, 20.0)
 
             turnover = np.abs(w - omega).sum()
