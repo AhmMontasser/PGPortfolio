@@ -552,3 +552,43 @@ deflated-Sharpe result (≈0.50 after search correction), the honest
 conclusion is that this dataset's extractable edge is fully harvested;
 the standing system (round-8 stack + asymmetric short stops, risk-budget
 menu unchanged) should now be graded by data that does not exist yet.
+
+---
+
+# Round 10 — structure & level information (S/R, Fib, waves, profiles)
+
+Pre-registered (`experiments/round10_preregistration.md`, commit 435a6ff):
+12 objective implementations of classical charting information as entry
+gates on the 4h base — ZigZag swing support/resistance, level-breakout
+size bonus, round-number levels, volume-at-price profile veto, Fibonacci
+retracement veto, regression-t-stat "trend lines", Elliott-proxy wave
+count, 52-week-high anchoring, wick-rejection, BTC leader veto, anchored
+VWAP, prior-day extremes. Matched-window control; sub-fold rule; one
+holdout look at the synthesis.
+
+**Findings:**
+
+* **Six of twelve gates never fire** (byte-identical equity curves):
+  swing-S/R veto, level bonus, wave caution, wick rejection, leader
+  veto, AVWAP. Structural insight: a channel-breakout entry is *by
+  construction* already through its prior highs — "don't buy into
+  resistance" is inert for breakout systems; S/R logic only binds for
+  pullback-style entries (which round 7 showed lose money here).
+* Round-number veto, 52-week anchor, t-stat trend filter: real effects,
+  negative (reject on dev).
+* **Volume-profile veto** (dev Sharpe 1.65, 2/3 folds) and **Fib-retrace
+  veto** (1.60, 2/3) passed the dev rule; their synthesis (dev 1.68)
+  **failed the single holdout look (Sharpe 0.88 vs base 1.02)** — not
+  adopted. This is the third consecutive round (7, 9, 10) in which
+  dev-validated transformations of price fail forward, now under full
+  pre-registration.
+
+**Round-10 outcome:** goal not met; standing system unchanged. The
+triple-replicated conclusion: for this system class, additional
+*price-derived* information — indicators, levels, waves, structures —
+does not contain forward-transferable edge beyond what the breakout +
+regime + funding stack already extracts. The remaining candidates that
+have shown OOS promise but failed dev (funding-tightness, order-flow
+confirmation, 30-minute reaction speed) share one property: they help
+in the 2024-26 regime. They are the natural candidates for *live*
+A/B validation, which no amount of further backtesting can substitute.
