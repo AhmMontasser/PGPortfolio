@@ -522,6 +522,8 @@ def build_rule_agent(rule_config, period_seconds):
         return FundingCarry(period_seconds, **params)
     if kind == "funding_gate":
         return FundingGate(period_seconds, **params)
+    if kind == "structure_gate":
+        return StructureGate(period_seconds, **params)
     if kind == "entry_filter":
         return EntryFilterGate(period_seconds, **params)
     if kind == "pullback":
@@ -529,3 +531,216 @@ def build_rule_agent(rule_config, period_seconds):
     if kind == "ensemble":
         return Ensemble(period_seconds, **params)
     raise ValueError("unknown rule agent type %r" % kind)
+
+
+class StructureGate(object):
+    """Price-structure / level-based entry gates (round-10 researches).
+
+    Wraps a rule agent; like EntryFilterGate it only affects *new entries*.
+    Structural level sets (ZigZag swing pivots, volume-at-price profile)
+    are recomputed on the first bar of each month and cached - levels are
+    slow-moving by construction.  All thresholds are in daily-ATR (dATR)
+    units, dATR = mean(4h high-low, 14d) * 2.45.
+
+    Checks (enable via constructor params; all default off):
+      swing_sr        - veto entries into the nearest opposing pivot
+      level_bonus     - 1.25x size for entries that cleared their pivot
+      round_veto      - veto entries just below/above round-number levels
+      profile_veto    - veto entries into overhead/underfoot high-volume
+                        nodes (needs volume channel)
+      fib_veto        - veto longs beyond a 61.8% retrace of the 180d swing
+      tstat_filter    - require 60d OLS slope |t| > 2 in trade direction
+      wave_caution    - veto longs after >=5 consecutive zigzag up-legs
+      hi52_anchor     - 1.25x near the 365d high, veto >30% below it
+      wick_veto       - veto after an opposing rejection wick at a pivot
+      leader_veto     - veto alt entries against BTC's last bar (>1 dATR)
+      avwap_gate      - longs only above / shorts only below the
+                        month-anchored VWAP (needs volume channel)
+      pd_extremes     - entries only on prior-day high/low breaks
+    """
+
+    def __init__(self, period_seconds, member, volume_channel=4, **checks):
+        self._member = build_rule_agent(member, period_seconds)
+        self._period = period_seconds
+        self._per_day = int(round(DAY / period_seconds))
+        self._checks = checks
+        self._volume_channel = volume_channel
+        self._coins = None
+
+    def begin_month(self, coins):
+        if hasattr(self._member, "begin_month"):
+            self._member.begin_month(coins)
+        self._coins = list(coins)
+        self._btc = next((i for i, c in enumerate(coins)
+                          if c.startswith("BTC")), None)
+        self._cache = None
+        self._bar = 0
+
+    # ---------------------------------------------------------- structure
+
+    @staticmethod
+    def _zigzag(close, threshold=0.10):
+        """Pivot list [(index, price, +1 high/-1 low), ...]."""
+        pivots = []
+        last_ext, last_i, direction = close[0], 0, 0
+        for i in range(1, len(close)):
+            p = close[i]
+            if direction >= 0 and p > last_ext:
+                last_ext, last_i = p, i
+            elif direction <= 0 and p < last_ext:
+                last_ext, last_i = p, i
+            move = p / last_ext - 1.0
+            if direction >= 0 and move < -threshold:
+                pivots.append((last_i, last_ext, +1))
+                direction, last_ext, last_i = -1, p, i
+            elif direction <= 0 and move > threshold:
+                pivots.append((last_i, last_ext, -1))
+                direction, last_ext, last_i = +1, p, i
+        return pivots
+
+    def _build_cache(self, history):
+        close = history[0]
+        n_levels = 1080 if close.shape[1] >= 1080 else close.shape[1]
+        cache = {"pivots": [], "profile": [], "uplegs": []}
+        for i in range(close.shape[0]):
+            series = close[i, -n_levels:]
+            pivots = self._zigzag(series)
+            cache["pivots"].append([(p, s) for _, p, s in pivots])
+            signs = [s for _, _, s in pivots]
+            up = 0
+            for s in signs[::-1]:
+                if s == +1:
+                    up += 1
+                elif up:
+                    break
+            cache["uplegs"].append(up)
+            if self._checks.get("profile_veto") or self._checks.get("avwap_gate"):
+                vol = history[self._volume_channel, i, -540:]
+                pr = close[i, -540:]
+                bins = np.exp(np.linspace(np.log(pr.min() + 1e-12),
+                                          np.log(pr.max() + 1e-9), 31))
+                hist, _ = np.histogram(pr, bins=bins, weights=vol)
+                cache["profile"].append((bins, hist))
+            else:
+                cache["profile"].append(None)
+        return cache
+
+    # -------------------------------------------------------------- decide
+
+    def decide_by_history(self, history, last_w):
+        w = np.asarray(self._member.decide_by_history(history, last_w),
+                       dtype=np.float64)
+        if self._cache is None:
+            self._cache = self._build_cache(history)
+        self._bar += 1
+        close = history[0]
+        high, low = history[1], history[2]
+        last = close[:, -1]
+        atr_bars = 14 * self._per_day
+        datr = np.mean(high[:, -atr_bars:] - low[:, -atr_bars:], axis=1) * \
+            np.sqrt(self._per_day)
+        entering = (np.sign(w) != np.sign(last_w)) & (np.sign(w) != 0)
+        c = self._checks
+        size = np.ones_like(w)
+        allowed = np.ones_like(w, dtype=bool)
+
+        for i in range(len(w)):
+            if not entering[i]:
+                continue
+            sign = np.sign(w[i])
+            pivots = self._cache["pivots"][i]
+            above = [p for p, _ in pivots if p > last[i]]
+            below = [p for p, _ in pivots if p < last[i]]
+            res = min(above) if above else None
+            sup = max(below) if below else None
+            if c.get("swing_sr"):
+                if sign > 0 and res and res - last[i] < datr[i]:
+                    allowed[i] = False
+                if sign < 0 and sup and last[i] - sup < datr[i]:
+                    allowed[i] = False
+            if c.get("level_bonus"):
+                highs = [p for p, s in pivots if s > 0]
+                lows = [p for p, s in pivots if s < 0]
+                if sign > 0 and highs and last[i] > max(h for h in highs) + \
+                        0.25 * datr[i]:
+                    size[i] = 1.25
+                if sign < 0 and lows and last[i] < min(l for l in lows) - \
+                        0.25 * datr[i]:
+                    size[i] = 1.25
+            if c.get("round_veto"):
+                exponent = np.floor(np.log10(max(last[i], 1e-12)))
+                grid = np.array([1, 2, 5, 10]) * 10.0 ** exponent
+                above_r = grid[grid >= last[i]]
+                below_r = grid[grid <= last[i]]
+                if sign > 0 and len(above_r) and \
+                        above_r.min() - last[i] < 0.5 * datr[i]:
+                    allowed[i] = False
+                if sign < 0 and len(below_r) and \
+                        last[i] - below_r.max() < 0.5 * datr[i]:
+                    allowed[i] = False
+            if c.get("profile_veto") and self._cache["profile"][i]:
+                bins, hist = self._cache["profile"][i]
+                lo_p, hi_p = sorted([last[i], last[i] + sign * 2 * datr[i]])
+                mask = (bins[:-1] < hi_p) & (bins[1:] > lo_p)
+                if mask.any() and hist[mask].max() > 1.5 * hist.mean():
+                    allowed[i] = False
+            if c.get("fib_veto") and sign > 0:
+                swing = close[i, -1080:]
+                lo_i = swing.argmin()
+                hi_v = swing[lo_i:].max()
+                lo_v = swing[lo_i]
+                if hi_v > lo_v and (hi_v - last[i]) / (hi_v - lo_v) > 0.618:
+                    allowed[i] = False
+            if c.get("tstat_filter"):
+                y = np.log(close[i, -60 * self._per_day:])
+                x = np.arange(len(y), dtype=float)
+                vx = x - x.mean()
+                beta = (vx * (y - y.mean())).sum() / (vx ** 2).sum()
+                resid = y - y.mean() - beta * vx
+                se = np.sqrt((resid ** 2).sum() / (len(y) - 2) /
+                             (vx ** 2).sum())
+                t = beta / max(se, 1e-12)
+                if sign * t < 2.0:
+                    allowed[i] = False
+            if c.get("wave_caution") and sign > 0 and \
+                    self._cache["uplegs"][i] >= 5:
+                allowed[i] = False
+            if c.get("hi52_anchor") and sign > 0:
+                hi52 = close[i, -365 * self._per_day:].max()
+                if last[i] < 0.70 * hi52:
+                    allowed[i] = False
+                elif last[i] > 0.95 * hi52:
+                    size[i] = 1.25
+            if c.get("wick_veto"):
+                rng = high[i, -1] - low[i, -1] + 1e-12
+                if sign > 0:
+                    wick = (high[i, -1] - max(close[i, -1], close[i, -2])) / rng
+                    if wick > 0.6 and res and res - last[i] < datr[i]:
+                        allowed[i] = False
+                else:
+                    wick = (min(close[i, -1], close[i, -2]) - low[i, -1]) / rng
+                    if wick > 0.6 and sup and last[i] - sup < datr[i]:
+                        allowed[i] = False
+            if c.get("leader_veto") and self._btc is not None and \
+                    i != self._btc:
+                btc_move = close[self._btc, -1] - close[self._btc, -2]
+                if sign * btc_move < -datr[self._btc] * \
+                        (last[self._btc] / close[self._btc, -2]) * 0 - \
+                        datr[self._btc]:
+                    allowed[i] = False
+            if c.get("avwap_gate") and self._cache["profile"][i] is not None:
+                bars = min(self._bar, 540)
+                vol = history[self._volume_channel, i, -bars:]
+                vwap = (close[i, -bars:] * vol).sum() / max(vol.sum(), 1e-12)
+                if (sign > 0 and last[i] < vwap) or \
+                        (sign < 0 and last[i] > vwap):
+                    allowed[i] = False
+            if c.get("pd_extremes"):
+                pd_hi = high[i, -2 * self._per_day:-self._per_day].max()
+                pd_lo = low[i, -2 * self._per_day:-self._per_day].min()
+                if sign > 0 and last[i] <= pd_hi:
+                    allowed[i] = False
+                if sign < 0 and last[i] >= pd_lo:
+                    allowed[i] = False
+        w = np.where(entering & ~allowed, last_w, w * size)
+        return w
