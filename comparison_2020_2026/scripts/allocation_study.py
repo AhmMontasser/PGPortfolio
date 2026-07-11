@@ -113,15 +113,20 @@ def combo_simple(R, weights_series):
 
 
 def monthly_weights(R, fn):
-    """Build a monthly weight DataFrame from causal fn(trailing history)."""
+    """Build a monthly weight DataFrame from causal fn(trailing history).
+
+    Rebalance dates are the FIRST TRADING DAY of each calendar month present
+    in R.index (not resample labels, which can precede the data start and
+    silently leave the portfolio uninvested for the whole first month)."""
+    rb_dates = R.groupby([R.index.year, R.index.month]).apply(
+        lambda g: g.index[0])
     rows = {}
-    for t in R.resample("1MS").first().index:
+    for t in rb_dates.values:
         hist = R[R.index < t]
         w = fn(hist)
         if w is not None:
             rows[t] = w
     W = pd.DataFrame(rows, index=R.columns).T
-    # first month may lack history -> start equal weight
     return W
 
 
