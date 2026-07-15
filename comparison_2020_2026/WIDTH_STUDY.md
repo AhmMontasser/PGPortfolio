@@ -53,3 +53,23 @@ be one more in-sample parameter choice.
 **Verdict: keep N=10.** The width parameter was already explored by the
 original authors and the out-of-sample evidence still favors the committed
 configuration; n=20's full-period appeal does not survive the split.
+
+## Round 2 addendum: narrowing (N=5, N=8) — 2026-07-15
+
+The missing direction. New sleeve configs (`experiments/slv*_n{5,8}.json`)
+re-ran the five B3 sleeves at 5 and 8 coins; META-GT + overlays + k to the
+same 18.2% budget (`data/b3_n{5,8}_daily.csv`). Common-window results:
+
+| N | dev Sharpe (<2025) | OOS Sharpe (2025+) |
+|---|---|---|
+| 5 | 1.22 | 0.89 |
+| **8** | **1.70** | **1.01** |
+| **10 (ships)** | **1.72** | **0.87** |
+| 20 | 1.88 | 0.72 |
+| 30 | 1.61 | 0.37 |
+
+N=5 starves the cross-section; N=8 matches N=10 within noise (differences
+flip sign between windows). Together with round 1: **B3 sits on a plateau
+at 8–10 and the committed N=10 stays.** The joint blend-level grid with
+the EW side (25–100 coins, same verdict: keep 50) lives in EW_trader's
+`comparison_2020_2026/UNIVERSE_WIDTH_STUDY.md`.
